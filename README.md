@@ -1,3 +1,4 @@
+```markdown
 # Dynamic Electricity Price Ticker (XIAO ESP32C3)
 
 This project displays day-ahead electricity prices for Slovenia (Energy-Charts API) on a 20x4 I2C LCD using a XIAO ESP32C3.
@@ -33,8 +34,24 @@ Pin usage (GPIO - function):
   - Why: The RCWL-0516 output may float or remain high on boot; the pull-down ensures a defined LOW when idle and prevents the LCD backlight from unintentionally turning off or on.
   - If you do not use a presence sensor, the firmware keeps the backlight ON by default.
 
-### Button wiring
+### Button wiring (mechanical pushbutton)
 - One leg of the pushbutton to GPIO4, the other to GND. The code uses INPUT_PULLUP, so no external resistor is required.
+
+### ALTERNATIVE: TTP223 CAPACITIVE TOUCH BUTTON
+- If you prefer a capacitive touch button instead of mechanical pushbutton:
+  WIRING:
+  - VCC to 3.3V power rail
+  - GND to GND
+  - OUT to GPIO 4 (same pin as pushbutton)
+  CODE CHANGES REQUIRED:
+  - Find the line in the sketch that reads: `int reading = digitalRead(buttonPin);`
+  - Change it to: `int reading = !digitalRead(buttonPin);`
+  - This inverts the logic since the TTP223 outputs HIGH when touched, while the pushbutton pulls LOW when pressed.
+  - No other changes are needed — all timing and debounce logic remains the same.
+  BENEFITS:
+  - No mechanical wear, sealed operation
+  - Can be mounted behind thin non-metallic panels
+  - More modern, sleek appearance
 
 ### White LED wiring
 - GPIO5 -> 220Ω resistor -> LED anode
@@ -61,3 +78,4 @@ Pin usage (GPIO - function):
 
 ## License
 - Add license information here if you want to publish this repository.
+```
