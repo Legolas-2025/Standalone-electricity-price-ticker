@@ -193,7 +193,7 @@ unsigned long lastDebounceTime    = 0;
 unsigned long buttonPressStartTime = 0;
 bool longPressDetected   = false;
 const unsigned long debounceDelay      = 50;
-const unsigned long longPressThreshold = 2000;
+const unsigned long longPressThreshold = 3000;
 
 unsigned long lastClickTime     = 0;
 const unsigned long doubleClickWindow = 500;
@@ -393,7 +393,7 @@ void connectToWiFi() {
 
     if (stored_ssid.length() > 0) {
         lcd.setCursor(0, 0);
-        lcd.print("Elec. Rate SI");
+        lcd.print("Elec. Rate SI v6.0");
         lcd.setCursor(0, 1);
         lcd.print("Connecting...");
 
@@ -1116,14 +1116,9 @@ void displaySecondaryList() {
     uptimeMs %= (60UL * 60UL * 1000UL);
     unsigned long minutes = uptimeMs / (60UL * 1000UL);
     snprintf(lines[11], sizeof(lines[11]), "Up:%2lud%2luh%2lum", days, hours, minutes);
-
-    snprintf(lines[12], sizeof(lines[12]), "energy-charts.info");
-    snprintf(lines[13], sizeof(lines[13]), "dynamic electricity");
-    snprintf(lines[14], sizeof(lines[14]), "price ticker v6.0 ");
-    snprintf(lines[15], sizeof(lines[15]), "by Amir Toki^ 2025");
-
-    // NEW NVS STATUS LINES (16–19)
-    snprintf(lines[16], sizeof(lines[16]), "NVS status:");
+   
+	  // NEW NVS STATUS LINES (12–15)
+    snprintf(lines[12], sizeof(lines[12]), "NVS status:");
 
     if (nvsDataPresent) {
         // Data day line: "DD.MM.YYYY"
@@ -1132,9 +1127,9 @@ void displaySecondaryList() {
                  (nvsStoredDay > 0 ? nvsStoredDay : 0),
                  (nvsStoredMonth >= 0 ? nvsStoredMonth + 1 : 0),
                  (nvsStoredYear > 0 ? nvsStoredYear : 0));
-        snprintf(lines[17], sizeof(lines[17]), "Data day:%11s", dateBuf);
+        snprintf(lines[13], sizeof(lines[13]), "Data day:%11s", dateBuf);
     } else {
-        snprintf(lines[17], sizeof(lines[17]), "Data day: none     ");
+        snprintf(lines[13], sizeof(lines[13]), "Data day: none     ");
     }
 
     if (nvsLastStoreTime != 0) {
@@ -1144,22 +1139,28 @@ void displaySecondaryList() {
             // Use shorter format "DD.MM.YY" to keep line <= 20 chars
             snprintf(storeBuf, sizeof(storeBuf), "%2d.%2d.%02d",
                      st->tm_mday, st->tm_mon + 1, (st->tm_year + 1900) % 100);
-            snprintf(lines[18], sizeof(lines[18]), "Last save:%8s", storeBuf);
+            snprintf(lines[14], sizeof(lines[14]), "Last save:%8s", storeBuf);
         } else {
-            snprintf(lines[18], sizeof(lines[18]), "Last save: invalid ");
+            snprintf(lines[14], sizeof(lines[14]), "Last save: invalid ");
         }
     } else {
-        snprintf(lines[18], sizeof(lines[18]), "Last save: none    ");
+        snprintf(lines[14], sizeof(lines[14]), "Last save: none    ");
     }
 
     // Simple status flag
     if (nvsDataPresent && nvsDataLoadedForToday) {
-        snprintf(lines[19], sizeof(lines[19]), "NVS: OK (today)    ");
+        snprintf(lines[15], sizeof(lines[15]), "NVS: OK (today)    ");
     } else if (nvsDataPresent && !nvsDataLoadedForToday) {
-        snprintf(lines[19], sizeof(lines[19]), "NVS: old data      ");
+        snprintf(lines[15], sizeof(lines[15]), "NVS: old data      ");
     } else {
-        snprintf(lines[19], sizeof(lines[19]), "NVS: empty         ");
+        snprintf(lines[15], sizeof(lines[15]), "NVS: empty         ");
     }
+
+    // CREDITS MOVED TO LINES 16–19
+    snprintf(lines[16], sizeof(lines[16]), "energy-charts.info");
+    snprintf(lines[17], sizeof(lines[17]), "dynamic electricity");
+    snprintf(lines[18], sizeof(lines[18]), "price ticker v6.0 ");
+    snprintf(lines[19], sizeof(lines[19]), "by Amir Toki^ 2025");
 
     // Render current window
     for (int i = 0; i < 4; i++) {
@@ -1534,7 +1535,7 @@ void setup() {
     lcd.createChar(4, hi_prc);
 
     lcd.setCursor(0, 0);
-    lcd.print("Initializing v6.0");
+    lcd.print("Initializing ...");
     delay(1000);
 
     connectToWiFi();
