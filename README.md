@@ -1,81 +1,309 @@
-```markdown
-# Dynamic Electricity Price Ticker (XIAO ESP32C3)
+# Electricity Price Ticker for XIAO ESP32‑C3 (Slovenia, Energy‑Charts)
 
-This project displays day-ahead electricity prices for Slovenia (Energy-Charts API) on a 20x4 I2C LCD using a XIAO ESP32C3.
-It shows hourly averages and 15-minute detail for the current hour, and uses a white LED as a visual price indicator.
+This project is an Arduino‑IDE‑friendly firmware for the **Seeed XIAO ESP32‑C3** that:
+
+- Connects to Wi‑Fi.
+- Fetches day‑ahead electricity prices for **Slovenia** from [Energy‑Charts.info](https://energy-charts.info).
+- Computes final consumer prices (including configurable fees + VAT).
+- Displays current and upcoming prices on a **20x4 I²C 2004 LCD**.
+- Uses an LED and presence sensor to give quick visual feedback.
+
+The code currently implements **Version 6.0** of the ticker, focusing on:
+
+- Daily (not hourly) API fetching.
+- Robust **NVS storage** of daily price data for resilience to reboots.
+- Automatic CET/CEST handling.
+- Preserved UI and button behavior from v5.5.
+
+All available bidding zones (modify in the code):
+- AT - Austria 
+- BE - Belgium
+- BG - Bulgaria
+- CH - Switzerland
+- CZ - Czech Republic
+- DE-LU - Germany, Luxembourg
+- DE-AT-LU - Germany, Austria, Luxembourg
+- DK1 - Denmark 1
+- DK2 - Denmark 2
+- EE - Estionia
+- ES - Spain
+- FI - Finland
+- FR - France
+- GR - Greece
+- HR - Croatia
+- HU - Hungary
+- IT-Calabria - Italy Calabria
+- IT-Centre-North - Italy Centre North
+- IT-Centre-South - Italy Centre South
+- IT-North - Italy North
+- IT-SACOAC - Italy Sardinia Corsica AC
+- IT-SACODC - Italy Sardinia Corsica DC
+- IT-Sardinia - Italy Sardinia
+- IT-Sicily - Italy Sicily
+- IT-South - Italy South
+- LT - Lithuania
+- LV - Latvia
+- ME - Montenegro
+- NL - Netherlands
+- NO1 - Norway 1
+- NO2 - Norway 2
+- NO2NSL - Norway North Sea Link
+- NO3 - Norway 3
+- NO4 - Norway 4
+- NO5 - Norway 5
+- PL - Poland
+- PT - Portugal
+- RO - Romania
+- RS - Serbia
+- SE1 - Sweden 1
+- SE2 - Sweden 2
+- SE3 - Sweden 3
+- SE4 - Sweden 4
+- SI - Slovenia
+- SK - Slovakia
+
+---
 
 ## Features
-- Fetches day-ahead prices from Energy-Charts API (bzn=SI)
-- Displays current hour 15-minute detail on row 0 and hourly averages on remaining rows
-- LED patterns indicate price ranges (breathing, steady, blink, double-blink, triple-blink)
-- Wi‑Fi provisioning mode (AP + simple web UI)
-- Automatic NTP sync and DST-aware local time (CET/CEST for Ljubljana)
 
-## Important: DST / Timezone
-The firmware initializes timezone with the CET/CEST POSIX TZ string so `localtime()` and conversions of API unix timestamps respect DST transitions for Ljubljana:
+### Core display & pricing
 
-`configTzTime("CET-1CEST,M3.5.0/02:00,M10.5.0/03:00", "pool.ntp.org");`
+- Data source: [Energy‑Charts.info day‑ahead price API](https://api.energy-charts.info/price?bzn=SI) (bidding zone = `SI`).
+- Resolution:
+  - Prices in **15‑minute intervals** (4 per hour).
+  - Display shows:
+    - Current hour:
+      - Hourly average.
+      - Four 15‑minute prices in compact format (`XX XX XX XX`).
+    - Next 2 hours’ averages.
+- Price calculation:
+  - Raw MWh prices from API are converted to EUR/kWh.
+  - Optional surcharges:
+    - `POWER_COMPANY_FEE_PERCENTAGE` (default 12%).
+    - `VAT_PERCENTAGE` (default 22%).
+- LCD:
+  - **20x4 I²C (PCF8574 / 0x27)**.
+  - Custom characters for local language and low/high price markers.
 
-## Hardware and Pinout
-- Board: Seeed XIAO ESP32C3 (or compatible ESP32-C3 board)
+### LED behavior
 
-Pin usage (GPIO - function):
-- GPIO4  - Button (pushbutton to GND, internal pull-up enabled in code)
-- GPIO5  - White LED (use series resistor ~220-470Ω)
-- GPIO9  - Presence sensor (RCWL-0516) OUT
-- GPIO21 - Built-in status LED (WiFi indicator)
-- I2C (SDA / SCL) - LCD (LiquidCrystal_I2C), default address 0x27
+- One **white LED** connected to GPIO 5.
+- LED indicates **current 15‑minute segment** price:
+  - Very cheap (`<= 0.05 EUR/kWh`): smooth breathing.
+  - Cheap, normal, expensive, very expensive: different steady / blinking / double‑blink patterns.
+  - Negative or no data: LED off.
 
-### Presence sensor (RCWL-0516) wiring
-- VCC -> 3.3V
-- GND -> GND
-- OUT -> GPIO9
-- Crucial: add a 10kΩ pull-down resistor between GPIO9 (OUT) and GND.
-  - Why: The RCWL-0516 output may float or remain high on boot; the pull-down ensures a defined LOW when idle and prevents the LCD backlight from unintentionally turning off or on.
-  - If you do not use a presence sensor, the firmware keeps the backlight ON by default.
+### Presence sensor & backlight
 
-### Button wiring (mechanical pushbutton)
-- One leg of the pushbutton to GPIO4, the other to GND. The code uses INPUT_PULLUP, so no external resistor is required.
+- Optional **RCWL‑0516** presence sensor on GPIO 9:
+  - Presence = backlight on, LED enabled.
+  - No presence for a while = LCD backlight off, LED disabled.
+- If no presence sensor is detected, the backlight is kept on.
 
-### ALTERNATIVE: TTP223 CAPACITIVE TOUCH BUTTON
-- If you prefer a capacitive touch button instead of mechanical pushbutton:
-  WIRING:
-  - VCC to 3.3V power rail
-  - GND to GND
-  - OUT to GPIO 4 (same pin as pushbutton)
-  CODE CHANGES REQUIRED:
-  - Find the line in the sketch that reads: `int reading = digitalRead(buttonPin);`
-  - Change it to: `int reading = !digitalRead(buttonPin);`
-  - This inverts the logic since the TTP223 outputs HIGH when touched, while the pushbutton pulls LOW when pressed.
-  - No other changes are needed — all timing and debounce logic remains the same.
-  BENEFITS:
-  - No mechanical wear, sealed operation
-  - Can be mounted behind thin non-metallic panels
-  - More modern, sleek appearance
+### Button behavior
 
-### White LED wiring
-- GPIO5 -> 220Ω resistor -> LED anode
-- LED cathode -> GND
+- One button (or capacitive touch) on GPIO 4.
+- Uses internal pull‑up by default.
+- Actions:
+  - **Single short press**:
+    - Scrolls through the hourly view on the **primary** screen.
+  - **Double press**:
+    - Toggles between:
+      - Primary price view
+      - Secondary info view
+  - **Long press (≈3s in your current repo)**:
+    - Forces a **manual data refresh** (API fetch), regardless of daily schedule.
 
-### I2C LCD wiring
-- SDA -> board SDA pin
-- SCL -> board SCL pin
-- VCC -> 5V or 3.3V depending on module
-- GND -> GND
+---
 
-## Software
-- Espressif ESP32 Arduino core (tested with esp32 by Espressif Systems v3.3.2 in Arduino IDE)
-- ArduinoJson library
+## Version 6.0 – Daily Fetch + NVS Storage
 
-## Notes
-- The project stores Wi‑Fi credentials in non-volatile storage (Preferences) and falls back to an AP provisioning portal if no credentials are saved.
-- The code applies power company fees and VAT to convert wholesale EUR/MWh prices to final consumer EUR/kWh by default. You can disable fees by setting APPLY_FEES_AND_VAT to false.
+Version 6.0 is focused on:
 
-## How to use
-1. Upload the firmware to your XIAO ESP32C3.
-2. If no Wi‑Fi credentials are stored, the board will start an AP `MyTicker_Setup` — connect and open the provisioning web UI.
-3. After Wi‑Fi and NTP sync, the sketch will fetch prices and start displaying them.
+1. **Reducing API calls**  
+2. **Persisting daily data in NVS**  
+3. **Making the device robust to power outages**
+
+### 1. Daily fetch instead of hourly
+
+Previously (v5.5), the firmware fetched data **every hour** at the top of the hour.
+
+In **v6.0**, the behavior is:
+
+- **On boot (after Wi‑Fi + time sync):**
+  - Try to load **today’s** data from NVS:
+    - If found: use it directly, **no API call** at boot.
+    - If not found or invalid: schedule an immediate API fetch.
+- **After midnight (local time):**
+  - Detect day rollover via localtime.
+  - Immediately:
+    - Invalidate yesterday’s data (`isTodayDataAvailable = false`).
+    - Force display to show **“No data for today”**.
+    - Turn off the white LED (no price indication).
+    - Enter **midnight fetch phase**.
+
+#### Midnight fetch phase
+
+When the date changes:
+
+1. First fetch is scheduled **immediately**.
+2. If it fails:
+   - The device **stays in “No data for today”**, LED off.
+   - Retry schedule:
+     - 10‑minute interval, up to 5 attempts.
+     - After 5 failures, retry once at each **top of the hour** until it succeeds.
+
+As soon as a fetch for **today** succeeds:
+
+- `isTodayDataAvailable` is set to `true`.
+- The enforced `NO_DATA_OFFSET` state is cleared back to `CURRENT_PRICES`.
+- The LCD and LED resume showing today’s prices.
+
+> Importantly, **yesterday’s data is never re‑used** for today, both at boot and after midnight.
+
+### 2. NVS (non‑volatile) storage of daily data
+
+The ESP32‑C3’s built‑in NVS is used via `Preferences`:
+
+- Namespace: `"my-ticker"`.
+- Keys (in addition to the existing Wi‑Fi credentials):
+  - `data_day`, `data_mon`, `data_year` – calendar date of the stored data.
+  - `data_prc` – full raw JSON response from the Energy‑Charts API.
+  - `data_last_store` – UNIX timestamp when the data was last written.
+
+#### On boot
+
+After time sync:
+
+- If NVS has data whose date **matches today**:
+  - `data_prc` JSON is deserialized into the in‑RAM `doc` (`StaticJsonDocument`).
+  - `processJsonData()` is run, just like after a live fetch.
+  - `isTodayDataAvailable = true`.
+  - No initial API call is needed.
+- If the stored date does **not** match today (or parsing fails):
+  - The stored data is **ignored** for display.
+  - The system starts from “No data for today” and will fetch new data.
+
+#### After each successful fetch for today
+
+- The entire JSON payload is stored as `data_prc` with the corresponding date and timestamp.
+- This means:
+  - A reboot **later in the same day** can immediately restore the latest prices from NVS.
+  - Reboots the next morning will detect the date mismatch and fetch new data instead of showing stale data.
+
+### 3. Secondary info (status) screen
+
+The secondary menu (double‑click to toggle) has **20 lines**, shown in 4‑line pages.
+
+It typically includes:
+
+- Current date and time.
+- Last successful update timestamp.
+- Daily average price in EUR/kWh (with company fee + VAT applied).
+- Wi‑Fi RSSI and IP address.
+- API success ratio and total calls.
+- Device uptime.
+- **NVS status section**:
+  - `NVS status:`
+  - `Data day: DD.MM.YYYY` or `Data day: none`
+  - `Last save: DD.MM.YY` or `Last save: none`
+  - `NVS: OK (today)` / `NVS: old data` / `NVS: empty`
+- Credits + version line:
+  - `energy-charts.info`
+  - `dynamic electricity`
+  - `price ticker v6.0`
+  - `by Amir Toki^ 2025`
+
+(Exact ordering and layout may differ slightly, based on your latest edits.)
+
+---
+
+## Hardware setup
+
+### Microcontroller
+
+- **Seeed XIAO ESP32‑C3**
+
+### LCD (I²C 2004)
+
+- 20x4 (2004) character LCD with I²C backpack (PCF8574).
+- Default I²C address: `0x27` (configurable in code).
+- Library: `LiquidCrystal_I2C`.
+
+### Button / touch input
+
+- GPIO 4, internal pull‑up enabled.
+
+**Mechanical pushbutton (default)**
+
+- One leg to GPIO 4, other leg to GND.
+
+**TTP223 capacitive touch (alternative)**
+
+- VCC → 3.3 V
+- GND → GND
+- OUT → GPIO 4
+
+Code change required for TTP223:
+
+```cpp
+// In handleButton() or wherever the button is read:
+int reading = !digitalRead(buttonPin);
+// Change to:
+int reading = digitalRead(buttonPin); // if TTP223 output is HIGH when touched
+```
+
+(Your current code uses `!digitalRead(buttonPin)` assuming an active‑LOW mechanical button.)
+
+### Presence sensor (RCWL‑0516)
+
+- VCC → 3.3 V
+- GND → GND
+- OUT → GPIO 9
+- 10 kΩ pull‑down resistor between GPIO 9 and GND.
+
+If no sensor is detected at boot, the firmware keeps the LCD backlight always on.
+
+### White LED
+
+- LED (with appropriate series resistor) on GPIO 5.
+
+---
+
+## Wi‑Fi provisioning
+
+If stored Wi‑Fi credentials are invalid or missing:
+
+1. Device starts in AP mode with SSID: `MyTicker_Setup`.
+2. DNS server redirects to a simple captive “Wi‑Fi Setup” page.
+3. You can enter SSID and password, which are stored in NVS (`Preferences`).
+4. The device restarts and attempts to connect with the new credentials.
+
+---
+
+## Building and flashing
+
+1. Open the `.ino` file in **Arduino IDE** (ensure ESP32 board support is installed).
+2. Select:
+   - Board: `Seeed XIAO ESP32C3`
+   - Port: correct serial port
+3. Install the required libraries if missing:
+   - `LiquidCrystal_I2C`
+   - `ArduinoJson`
+4. Compile and upload.
+
+---
+
+## Versioning and files
+
+Key documentation files:
+
+- [`VERSION.md`](./VERSION.md) – current firmware version and compatibility notes.
+- [`CHANGELOG.md`](./CHANGELOG.md) – detailed list of changes between versions.
+- `*.ino` – main firmware source file (v6.0 and later).
+
+---
 
 ## License
-- Add license information here if you want to publish this repository.
-```
+
+This project is licensed under the MIT License – see the [LICENSE](./LICENSE) file for details.
