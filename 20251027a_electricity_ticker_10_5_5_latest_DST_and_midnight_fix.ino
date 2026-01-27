@@ -10,6 +10,61 @@
   aggressive fetch.
 */
 
+// ========================================================================
+// Dynamic Electricity Ticker for XIAO ESP32C3 - VERSION 5.5 (15-MINUTE DETAIL MODE)
+// ========================================================================
+//
+// This code fetches real-time day-ahead electricity prices from
+// Energy-Charts.info for Slovenia, calculates the final consumer price
+// with power company fees and VAT, and displays the rates on a 20x4 LCD.
+//
+// VERSION 5.5 NEW FEATURES:
+// - **15-MINUTE DETAIL MODE:** Primary display now shows current hour average,
+//   followed by the 4 individual 15-minute values in compact format (XX XX XX XX),
+//   then the next 2 hours. This provides both hourly overview and 15-min precision.
+// - **LED responds to current 15-minute interval** instead of hourly average
+//   for more precise price indication.
+// - **Compact price format:** 15-minute values shown as 2-digit hundredths
+//   (e.g., "+99 -07  24  11" for prices like 0.99, -0.07, 0.24, 0.11 EUR/kWh)
+//
+// All previous features from V5.4 are retained (aggressive retry, state enforcement, etc.)
+//
+// ------------------------------------------------------------------------
+// Hardware Configuration & Wiring Instructions:
+// ------------------------------------------------------------------------
+// 
+// PUSHBUTTON (DEFAULT CONFIGURATION):
+// - Connect one leg to GPIO 4, other to GND
+// - Uses internal pull-up, no external resistor needed
+//
+// ALTERNATIVE: TTP223 CAPACITIVE TOUCH BUTTON:
+// - If you prefer a capacitive touch button instead of mechanical pushbutton:
+//   WIRING:
+//   - VCC to 3.3V power rail
+//   - GND to GND
+//   - OUT to GPIO 4 (same pin as pushbutton)
+//   CODE CHANGES REQUIRED:
+//   - Find line: "int reading = digitalRead(buttonPin);"
+//   - Change to: "int reading = !digitalRead(buttonPin);"
+//   - This inverts the logic since TTP223 outputs HIGH when touched,
+//     while pushbutton pulls LOW when pressed
+//   - No other changes needed - all timing and debounce logic remains the same
+//   BENEFITS:
+//   - No mechanical wear, sealed operation
+//   - Can be mounted behind thin non-metallic panels
+//   - More modern, sleek appearance
+//
+// PRESENCE SENSOR (RCWL-0516):
+// - VCC to 3.3V, GND to GND, OUT to GPIO 9
+// - REQUIRED: 10kOhm pull-down resistor between GPIO 9 and GND
+// - Can be hidden behind non-metallic surfaces
+//
+// WHITE LED:
+// - Connect to GPIO 5 (with appropriate resistor)
+// - Provides visual price indication
+//
+// ========================================================================
+
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <WiFi.h>
