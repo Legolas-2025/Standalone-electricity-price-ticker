@@ -1160,7 +1160,7 @@ void displaySecondaryList() {
     snprintf(lines[16], sizeof(lines[16]), "energy-charts.info");
     snprintf(lines[17], sizeof(lines[17]), "dynamic electricity");
     snprintf(lines[18], sizeof(lines[18]), "price ticker v6.0 ");
-    snprintf(lines[19], sizeof(lines[19]), "by Amir Toki^ 2025");
+    snprintf(lines[19], sizeof(lines[19]), "by Legolas-2025");
 
     // Render current window
     for (int i = 0; i < 4; i++) {
