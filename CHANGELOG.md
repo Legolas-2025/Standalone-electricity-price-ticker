@@ -1,147 +1,163 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
-
-This project follows a simple semantic versioning style:  
-`MAJOR.MINOR.PATCH`
+All notable changes to this project are documented here.
 
 ---
 
-## [6.0.0] - 2026-01-27
+## v6.1.0 – Midnight Fetch & Market Day Fix (2026‑01‑30)
 
-### Added
-- **Daily fetch + NVS storage (ESP32‑C3 NVS)**
-  - Introduced non‑volatile storage for daily price data using the existing `Preferences` (NVS) subsystem under the `"my-ticker"` namespace.
-  - Stored fields:
-    - `data_day`, `data_mon`, `data_year` (calendar date of the data)
-    - `data_prc` (raw JSON returned from the Energy‑Charts API)
-    - `data_last_store` (UNIX timestamp of last successful store)
-  - On boot, after Wi‑Fi and NTP time sync:
-    - The ticker checks NVS for stored data.
-    - If the stored date matches **today**, the JSON is deserialized and used directly (no initial API call needed).
-    - If the stored date is **not** today (or invalid), the data is ignored and the ticker behaves as if no data is available yet.
+**Summary**
 
-- **Midnight rollover + daily fetch logic**
-  - The system now performs **one daily fetch per day**, instead of hourly:
-    - **On boot**: fetch only if NVS does not already contain valid data for today.
-    - **After local midnight**: invalidate the previous day’s data and trigger a new fetch for the new day.
-  - As soon as a local‑time day change is detected:
-    - `isTodayDataAvailable` is set to `false`.
-    - The display state is forced to `"No data for today"` (`NO_DATA_OFFSET`).
-    - The white LED is turned off (same behavior as “no data”).
-    - A midnight fetch phase is activated.
+This release fixes a bug where the ticker could remain indefinitely on the **“No data for today”** screen after midnight, even though the API was already returning fresh data. It also refines the after‑midnight retry schedule.
 
-- **Midnight fetch retry strategy**
-  - When midnight is detected:
-    - First fetch is scheduled **immediately**.
-    - If it fails (HTTP error or JSON/“day mismatch”), the system stays in `"No data for today"` and the LEDs remain off.
-  - Retry policy during midnight phase:
-    1. Retry every **10 minutes**, up to **5 attempts**.
-    2. If still unsuccessful, retry only once **at the top of each following hour** until fresh data for the new day is retrieved.
-  - As soon as a successful fetch for today is obtained:
-    - `isTodayDataAvailable = true`.
-    - The enforced `NO_DATA_OFFSET` state is cleared back to `CURRENT_PRICES`.
-    - The white LED resumes indicating the current 15‑minute segment price.
-    - The entire successful JSON payload and metadata are saved back into NVS.
+### Fixed: Stuck on NO_DATA_OFFSET After Midnight
 
-- **Improved resilience after power loss**
-  - If the device reboots during the same day:
-    - It can **restore and reuse** the last successfully stored daily data from NVS.
-    - This avoids unnecessary API calls and gives a fast “warm start” after power outages.
-  - If the device reboots on the **next** day:
-    - Yesterday’s stored data is **not** used for display (to avoid confusion).
-    - The display starts in `"No data for today"` until the first successful fetch.
+**Problem (v6.0.0):**
 
-- **Extended secondary (info) menu**
-  - The secondary info screen (reachable via double‑click on the button) is extended from 16 to **20 lines**, still shown as 4‑line pages.
-  - Existing info retained:
-    - Current time and date.
-    - Last successful update timestamp.
-    - Daily average price.
-    - Wi‑Fi RSSI and device IP.
-    - API success ratio.
-    - Uptime.
-    - Credits and version information.
-  - **New NVS status section** (first defined around lines 12–15, later rearranged in your version):
-    - Shows:
-      - NVS data status (`NVS status:`)
-      - Stored data date (`Data day: DD.MM.YYYY` or `Data day: none`)
-      - Last store timestamp (`Last save: DD.MM.YY` or `Last save: none`)
-      - Basic quick status:
-        - `NVS: OK (today)` – valid data for today loaded from NVS
-        - `NVS: old data` – NVS has data, but not from today (ignored for display)
-        - `NVS: empty` – no stored price data present
+- After midnight, the device:
+  - Detected day rollover and entered a “no data” state.
+  - Scheduled an immediate API fetch.
+- However:
+  - The API can continue to serve **yesterday’s market day** for some time after local midnight.
+  - The code only checked the **first** `unix_seconds` entry against the current local day.
+  - HTTP + JSON success always incremented `apiSuccessCount`, even if `processJsonData()` subsequently decided the dataset was “not for today”.
+  - The scheduler treated such fetches as **successful**, pushed `nextScheduledFetchTime` 24 hours into the future, and never retried.
+  - Result: the ticker stayed on **NO_DATA_OFFSET** forever, until:
+    - A manual long‑press triggered a fresh fetch at a time when the API finally returned recognized “today” data, or
+    - The device was rebooted later in the day.
 
-### Changed
-- **API call strategy**
-  - Removed regular **top‑of‑hour** automatic fetching.
-  - API calls now occur only:
-    - Once at boot (if NVS has no valid data for today).
-    - After midnight (with the retry strategy described above).
-    - On user‑initiated **long‑press** (manual refresh).
-  - This significantly reduces network load while keeping behavior safe and predictable.
+**Solution (v6.1.0):**
 
-- **UI & behavior around day boundaries**
-  - At midnight / day change:
-    - Display is immediately set to:
-      - Line 0: `No data for today`
-      - Line 1: `Press & hold to`
-      - Line 2: `refresh manually`
-    - White LED is turned off (no price indication until new data arrives).
-  - Once data for the new day is available:
-    - The ticker returns to the usual 15‑minute detail + hourly display mode.
+1. **Market Day Detection**:
+   - `processJsonData()` now determines the “market day” using the **last** `unix_seconds` timestamp from the API’s dataset (assumed to cover one full day in 15‑minute steps).
+   - It compares that calendar date (local time) against the current local date.
+   - If they differ:
+     - The dataset is treated as **“not for today”**.
+     - `isTodayDataAvailable = false`.
+     - The function returns **false**, and a new flag `lastProcessJsonAcceptedToday` remains `false`.
 
-- **Versioning and info screens**
-  - Version bumped to **v6.0** and reflected in:
-    - Source file header comment.
-    - Secondary menu text (`price ticker v6.0`).
-    - New version documentation (`VERSION.md` / `CHANGELOG.md` / `README.md`).
+2. **Logical Failure vs HTTP/JSON Failure**:
+   - New global flag:
+     - `lastProcessJsonAcceptedToday` – `true` only when `processJsonData()` accepts the dataset as “today’s” data.
+   - In `handleDataFetching()`:
+     - A scheduled fetch is considered a **real success** only if:
+       - HTTP + JSON succeeded, **and**
+       - `lastProcessJsonAcceptedToday == true`.
+     - In all other cases (including “HTTP 200 + parse OK but data still for yesterday”):
+       - The fetch is treated as **failure** for scheduling purposes.
+       - If `midnightPhaseActive == true`, `scheduleAfterMidnightFailure()` is invoked to plan a retry.
 
-- **Long‑press threshold (in repository version)**
-  - Long‑press detection threshold extended from 2s to **3s** (in your repository copy) to avoid accidental manual refreshes.
+3. **Midnight Phase Cleanup**:
+   - When a fetch finally provides a dataset for today:
+     - `isTodayDataAvailable = true`.
+     - `lastProcessJsonAcceptedToday = true`.
+     - `midnightPhaseActive` is cleared; `midnightRetryCount` reset to 0.
+     - `nextScheduledFetchTime` is set to 24 hours ahead.
 
-### Fixed / Ensured
-- Yesterday’s data is **never shown** as if it were today’s:
-  - On boot: previous‑day NVS data is ignored for display.
-  - After midnight: in‑RAM data is invalidated and the UI explicitly shows `"No data for today"` until fresh data is fetched.
-- LED state is always consistent with the availability of **today’s** data:
-  - LED off → no today data (or negative price).
-  - LED patterns → valid today data and a positive price in the current 15‑minute interval.
+As a result, the ticker will **keep retrying** after midnight until a correct market‑day dataset appears, instead of giving up after the first HTTP 200.
 
 ---
 
-## [5.5.0] - 2025-10-27
+### Changed: After‑Midnight Retry Schedule
 
-> First 15‑minute detail version and DST‑fixed base, which v6.0 builds upon.
+In `scheduleAfterMidnightFailure()` the retry strategy when `midnightPhaseActive == true` has been tuned.
 
-### Added
-- **15‑minute detail mode**:
-  - Primary display shows:
-    - Current hour average.
-    - Four 15‑minute prices in compact format (`XX XX XX XX`).
-    - Next 2 hours’ averages.
-  - LED behavior switched from hourly‑based to **15‑minute‑segment based**.
-- **Compact price format**:
-  - 15‑minute values shown as 2‑digit hundredths (e.g. `+99 -07  24  11`).
-- **DST / timezone handling**:
-  - `configTzTime()` with `TZ_CET_CEST` for automatic CET ↔ CEST switching.
-- **Aggressive retry and state enforcement**:
-  - Improved logic for:
-    - Handling stale data.
-    - Enforcing `"No data for today"` state when needed.
-    - Aggressively retrying fetches after HTTP/JSON failures.
-- **UI and usability tweaks**:
-  - Button:
-    - Single click: scroll primary list (hourly view).
-    - Double click: switch primary/secondary list.
-    - Long press: manual refresh.
-  - Secondary info list:
-    - Date/time, last update, daily average, Wi‑Fi and API stats, uptime, credits.
+**Old behavior (v6.0.0, conceptual):**
+
+- First few failures after midnight:
+  - Retried every 10 minutes up to 5 attempts.
+- Afterwards:
+  - Switched to hourly retries (top of each hour).
+
+**New behavior (v6.1.0 + user configuration):**
+
+- Fast retry phase fully contained within the **first hour after midnight**.
+- You configured:
+
+  ```cpp
+  if (midnightRetryCount < 2) {
+      // Retry every 20 minutes for first 2 attempts (~1 hour window)
+      midnightRetryCount++;
+      nextScheduledFetchTime = now + 1200; // 20 minutes
+      debugPrint(2, "Midnight retry " + String(midnightRetryCount) + "/2 in 20 minutes");
+  } else {
+      // After that, retry only at top of each hour
+      ...
+  }
+  ```
+
+- Timeline:
+  - 00:00 – initial attempt (triggered by day rollover).
+  - If dataset is still for previous day:
+    - 1st retry at ~00:20.
+    - 2nd retry at ~00:40.
+  - After that:
+    - Retries only at the **top of the next hours** (01:00, 02:00, …),
+      until a dataset with market day = today is accepted.
+
+This configuration significantly reduces overnight API load while still ensuring the ticker picks up the new day as soon as the API publishes it.
 
 ---
 
-## Older versions
+### Other Behavior (Retained From v6.0.0)
 
-Earlier versions (≤5.4) introduced the basic ticker behavior, LCD layout, Energy‑Charts API integration, and the initial presence sensor / backlight / LED logic.
+- **NVS caching** of daily data:
+  - On boot, if NVS contains a dataset whose date matches today’s local date:
+    - The JSON is deserialized and processed.
+    - A new API call is **skipped**.
+  - After each accepted “today” fetch:
+    - Raw JSON payload, date, and a timestamp are stored in NVS.
+- **Manual long‑press refresh**:
+  - Still triggers immediate fetch via `nextScheduledFetchTime = now;`.
+  - Now also respects the improved “today” detection; “yesterday’s” data is not accepted as today.
+- **CET/CEST time handling**:
+  - Unchanged, still uses `TZ_CET_CEST` with `configTzTime`.
+- **Secondary menu and NVS status lines**:
+  - Retained from v6.0.0; updated only for version string and minor wording.
 
-Those versions are not fully documented here, but key user‑visible behavior is maintained in v6.0 unless explicitly noted in this changelog.
+---
+
+## v6.0.0 – NVS Storage & Daily Fetch (2026‑01‑27)
+
+**Summary**
+
+First major redesign focused on reducing API traffic and improving resilience using non‑volatile storage.
+
+### New
+
+- NVS namespace `"my-ticker"` introduced with keys:
+  - `ssid`, `pass` – Wi‑Fi credentials.
+  - `data_day`, `data_mon`, `data_year` – stored data calendar day.
+  - `data_prc` – raw JSON string from API.
+  - `data_last_store` – Unix time when data was stored.
+- Boot behavior:
+  - Try to load and validate NVS data.
+  - If date matches today → reuse it and **skip** initial API call.
+- After‑midnight behavior:
+  - NVS is overwritten with each successful new‑day dataset.
+  - In‑RAM data for yesterday is invalidated at day rollover.
+
+### UI / Menu
+
+- Primary list:
+  - 15‑minute detail for current hour.
+  - Hourly averages for current + next 2 hours.
+- Secondary list:
+  - Expanded to 20 lines to include:
+    - Time/date, last update, daily average.
+    - Wi‑Fi RSSI, IP address.
+    - API success rate, uptime.
+    - NVS status block.
+    - Credits & version line.
+
+---
+
+## v5.x – Earlier Versions
+
+Earlier versions (v5.x and below) had:
+
+- No NVS‑based caching of daily API data.
+- More frequent API calls (e.g., hourly refresh pattern).
+- Less robust handling of DST and daily boundaries.
+
+For exact details, see older `.ino` files and their header comments in this repository.
