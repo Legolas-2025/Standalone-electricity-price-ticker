@@ -9,8 +9,9 @@ This project is an Arduino‑IDE‑friendly firmware for the **Seeed XIAO ESP32�
 - Uses a white LED and an optional presence sensor to give quick visual feedback.
 - Stores daily price data in **NVS** to survive reboots and reduce API calls.
 
-The latest sketch implements **Version 6.1.0**, focusing on:
+The latest sketch implements **Version 6.1.1**, focusing on:
 
+- Version 6.1.1 fix: Correct daily **low/high hourly markers** (now includes negative and **0.0** prices).
 - Daily (not hourly) API fetching.
 - Robust **NVS storage** of daily price data.
 - Correct **CET/CEST** handling.
@@ -236,7 +237,7 @@ The LED is driven with various patterns to indicate price level; see “LED Pric
 
 ---
 
-## Firmware Features (v6.1.0)
+## Firmware Features (v6.1.1)
 
 ### Core Display & Pricing
 
@@ -260,6 +261,8 @@ The LED is driven with various patterns to indicate price level; see “LED Pric
   - `LiquidCrystal_I2C` with custom characters for:
     - Local language letters.
     - Low‑price and high‑price indicators.
+- **Daily min/max markers**:
+  - The low/high hourly indicators now consider **negative**, **0.0**, and positive prices (v6.1.1 fix).
 
 ### LED Price Signalling
 
@@ -349,7 +352,7 @@ After successful NTP time sync:
 
 ---
 
-## Daily Fetch Strategy (v6.1.0)
+## Daily Fetch Strategy (v6.1.0+)
 
 ### Goals
 
