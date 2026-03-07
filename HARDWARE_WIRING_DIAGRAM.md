@@ -6,11 +6,14 @@ It includes:
 - Required peripherals (LCD + button)
 - Supported optional peripherals (presence sensor + white LED + optional TTP223 touch button alternative)
 
+> Further reference (official board documentation):
+> - https://wiki.seeedstudio.com/XIAO_ESP32C3_Getting_Started/
+
 > Notes:
 > - Always connect **all grounds together** (ESP32 GND, LCD GND, sensor GND, LED GND).
-> - Verify your **XIAO ESP32‑C3 SDA/SCL pins** in the Seeed pinout; the sketch uses the board default I²C pins.
-> - **Important:** The **10 kΩ pull-down resistor on GPIO 9 is mandatory at all times** (even if the presence sensor is not connected).
-> - Button input is on **GPIO 4**. You may use either a **mechanical pushbutton** (default) *or* a **TTP223 touch module** (alternative), but not both in parallel unless you know what you’re doing.
+> - Verify your **XIAO ESP32‑C3 pinout** in the Seeed documentation link above.
+> - **Important:** The **10 kΩ pull-down resistor on D9 is mandatory at all times** (even if the presence sensor is not connected).
+> - Button input is on **D2**. You may use either a **mechanical pushbutton** (default) *or* a **TTP223 touch module** (alternative), but not both in parallel unless you know what you’re doing.
 
 ---
 
@@ -22,16 +25,17 @@ flowchart TB
 
   LCD["20x4 I2C LCD 2004<br/>PCF8574 backpack<br/>I2C addr 0x27"]:::lcd
 
-  %% Button input options (GPIO 4)
-  GPIO4["GPIO 4 node<br/>(buttonPin input)"]:::io
+  %% Button input options (XIAO D2)
+  D2NODE["D2 node<br/>(buttonPin input)"]:::io
   BTN["Mechanical pushbutton<br/>default option<br/>active LOW to GND"]:::btn
   TTP["TTP223 capacitive touch<br/>optional alternative<br/>OUT is HIGH when touched"]:::touch
 
-  %% Presence-sensor input stage (GPIO 9) - always present
-  GPIO9["GPIO 9 node<br/>(presencePin input)"]:::io
-  RPD["10k pull-down resistor<br/>GPIO 9 to GND<br/>MANDATORY"]:::res
+  %% Presence-sensor input stage (XIAO D9) - always present
+  D9NODE["D9 node<br/>(presencePin input)"]:::io
+  RPD["10k pull-down resistor<br/>D9 to GND<br/>MANDATORY"]:::res
   PRES["RCWL-0516 presence sensor<br/>optional"]:::pres
 
+  %% White LED output (XIAO D3)
   LED1["White indicator LED<br/>optional"]:::led
 
   PSU5V["5V supply<br/>USB-C or regulated 5V"]:::pwr
@@ -50,32 +54,31 @@ flowchart TB
   LCD --- GND
   BTN --- GND
   TTP --- GND
-  GPIO4 --- GND
+  D2NODE --- GND
 
-  GPIO9 --- GND
-  RPD --- GND
+  D9NODE --- GND
   PRES --- GND
 
   LED1 --- GND
   PSU5V --- GND
 
   %% I2C
-  MCU -->|"SDA (board I2C SDA)"| LCD
-  MCU -->|"SCL (board I2C SCL)"| LCD
+  MCU -->|"SDA D4"| LCD
+  MCU -->|"SCL D5"| LCD
 
-  %% GPIO 4 button input stage (always)
-  MCU -->|"GPIO 4 (buttonPin)"| GPIO4
-  BTN -->|"button to GND"| GPIO4
-  TTP -->|"OUT to GPIO 4 node"| GPIO4
+  %% Button input stage (always)
+  MCU -->|"D2 (buttonPin)"| D2NODE
+  BTN -->|"button to GND"| D2NODE
+  TTP -->|"OUT to D2 node"| D2NODE
 
-  %% GPIO 9 presence input stage (always)
-  MCU -->|"GPIO 9 (presencePin)"| GPIO9
-  GPIO9 ---|"10k"| RPD
+  %% Presence input stage (always)
+  MCU -->|"D9 (presencePin)"| D9NODE
+  D9NODE ---|"10k"| RPD
   RPD -->|"to GND"| GND
-  PRES -->|"OUT to GPIO 9 node"| GPIO9
+  PRES -->|"OUT to D9 node"| D9NODE
 
-  %% White LED (single LED, directly from GPIO with series resistor)
-  MCU -->|"GPIO 5 (whiteLedPin)"| LED1
+  %% White LED (single LED, directly from pin with series resistor)
+  MCU -->|"D3 (whiteLedPin)"| LED1
 
 classDef mcu fill:#e8f0ff,stroke:#2b5fd9,stroke-width:1px,color:#000;
 classDef lcd fill:#fff4e5,stroke:#cc7a00,stroke-width:1px,color:#000;
