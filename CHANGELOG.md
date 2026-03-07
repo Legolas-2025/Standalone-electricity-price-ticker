@@ -4,6 +4,38 @@ All notable changes to this project are documented here.
 
 ---
 
+## v6.1.1 – Daily Min/Max Includes Negative & Zero Prices (2026‑03‑07)
+
+**Summary**
+
+This release fixes a bug where the **daily lowest / highest hourly price marker** ignored negative prices (and also ignored 0.0), which could cause the ticker to incorrectly mark the **lowest positive** hour as the daily minimum.
+
+### Fixed: Daily Low/High Marker Ignored Negative & Zero Prices
+
+**Problem (v6.1.0):**
+
+- In `processJsonData()` the daily min/max scan used:
+
+  - `if (hourlyAvg > 0) { ... }`
+
+- This had two side effects:
+  1. **Negative** hourly averages were completely skipped.
+  2. A true price of **0.0** was also skipped (even though 0 can be a valid market price).
+
+- Additionally, the daily average was computed as `sum / 24.0` even though hours were being skipped from `sum`, making the daily average incorrect whenever any hour was excluded.
+
+**Solution (v6.1.1):**
+
+- The min/max and average scan now:
+  - Treats an hour as valid based on **data availability** (having all 4×15‑minute entries), not based on value sign.
+  - Includes **all values** (negative, zero, positive) when computing:
+    - `lowestPriceIndex`
+    - `highestPriceIndex`
+    - `averagePrice`
+  - Computes `averagePrice` using the number of valid hours (normally 24).
+
+---
+
 ## v6.1.0 – Midnight Fetch & Market Day Fix (2026‑01‑30)
 
 **Summary**
