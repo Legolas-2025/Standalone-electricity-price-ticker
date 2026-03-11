@@ -4,11 +4,38 @@ All notable changes to this project are documented here.
 
 ---
 
+## v6.1.2 – LED Indicator Restored (ESP32 PWM Fix) (2026‑03‑11)
+
+**Summary**
+
+This release fixes a regression introduced in **v6.1.1** where the **white LED price indicator** could remain **dimly lit** even when the LCD backlight turned off, and the intended **blink/breathe patterns** no longer behaved correctly.
+
+### Fixed: White LED Stuck Dim / Patterns Broken (PWM vs Digital)
+
+**Problem (v6.1.1):**
+
+- The sketch uses `analogWrite()` to drive the LED with PWM for breathe/blink patterns.
+- However, in some “LED OFF” branches the code used `digitalWrite(LOW)` on the same `whiteLedPin`.
+- On ESP32 (LEDC), once PWM is attached to a pin, `digitalWrite(LOW)` may **not fully disable** PWM output.
+- Result:
+  - LED could remain **faintly on** (dim glow) when LEDs were supposed to be off (e.g., presence timeout / backlight off).
+  - Some patterns could appear “stuck” or inconsistent.
+
+**Solution (v6.1.2):**
+
+- LED control is now **PWM‑only** inside `updateLeds()`:
+  - Use `analogWrite(whiteLedPin, 0)` instead of `digitalWrite(whiteLedPin, LOW)`.
+  - Use `analogWrite(whiteLedPin, 255)` instead of `digitalWrite(whiteLedPin, HIGH)`.
+  - Blink/double‑blink toggles now switch between PWM **0** and **255**.
+- This ensures the LED is **truly off** whenever LED output is gated off (no data, no time sync, or presence timeout).
+
+---
+
 ## v6.1.1 – Daily Min/Max Includes Negative & Zero Prices (2026‑03‑07)
 
 **Summary**
 
-This release fixes a bug where the **daily lowest / highest hourly price marker** ignored negative prices (and also ignored 0.0), which could cause the ticker to incorrectly mark the **lowest positive** hour as the daily minimum.
+This release fixes a bug where the **daily lowest / highest hourly price marker** ignored negative prices (and also ignored 0.0), which could cause the ticker to incorrectly mark the **lowest positive[...]
 
 ### Fixed: Daily Low/High Marker Ignored Negative & Zero Prices
 
@@ -40,7 +67,7 @@ This release fixes a bug where the **daily lowest / highest hourly price marker*
 
 **Summary**
 
-This release fixes a bug where the ticker could remain indefinitely on the **“No data for today”** screen after midnight, even though the API was already returning fresh data. It also refines the after‑midnight retry schedule.
+This release fixes a bug where the ticker could remain indefinitely on the **“No data for today”** screen after midnight, even though the API was already returning fresh data. It also refines the [...]
 
 ### Fixed: Stuck on NO_DATA_OFFSET After Midnight
 
