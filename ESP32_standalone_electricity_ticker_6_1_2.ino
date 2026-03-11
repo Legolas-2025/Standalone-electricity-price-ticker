@@ -1,36 +1,28 @@
 /* 
-  ESP32_standalone_electricity_ticker_6_1_2.ino
+  ESP32_standalone_electricity_ticker_6_1_2_nvs_daily_fetch.ino
   -----------------------------------------------------
 
-  VERSION 6.1.2 CHANGES (2026-03-12):
+  VERSION 6.1.2 CHANGES (2026-03-11):
   ----------------------------------
   FIX:
-  - Fixed LED indicator not working properly (constantly dimly lit, not responding
-    to price patterns, staying on when LCD backlight turns off).
-  - Root cause: Mixing analogWrite() and digitalWrite() on ESP32 causes PWM channel
-    to remain active even after digitalWrite(LOW), resulting in dim LED.
-  - Solution: Use analogWrite() consistently for all whiteLedPin control:
-      * analogWrite(whiteLedPin, 0) instead of digitalWrite(whiteLedPin, LOW)
-      * analogWrite(whiteLedPin, 255) instead of digitalWrite(whiteLedPin, HIGH)
-  - LED now properly turns off when backlight is off (areLedsOn = false).
-  - LED now correctly shows breathing/blinking patterns based on price thresholds.
-
-  VERSION 6.1.1 CHANGES (2026-03-07):
-  ----------------------------------
-  FIX:
-  - Daily lowest/highest hourly indicator (and daily average) now correctly considers
-    ALL hourly averages, including negative values and 0.0 (which can be real prices).
-  - The daily average is now computed using the number of valid hours actually present
-    in the dataset (validHourCount), instead of always dividing by 24.
+  - Restore correct white LED price indicator behavior on ESP32 (XIAO ESP32C3) by
+    avoiding mixing analogWrite() (LEDC PWM) and digitalWrite() on the same pin.
+  - When LED should be OFF we now use analogWrite(whiteLedPin, 0) (instead of digitalWrite LOW).
+  - When LED should be fully ON we now use analogWrite(whiteLedPin, 255) (instead of digitalWrite HIGH).
+  - Blink / double-blink patterns now toggle between PWM 0 and 255 so the LED is truly off
+    when backlight/presence logic turns LEDs off (no more dimly-lit LED).
 
   NOTE:
-  - This version includes all fixes from v6.1.1 plus the LED fix.
+  - This version is identical to v6.1.1 except for:
+      * updateLeds() LED control fix (PWM-only on whiteLedPin)
+      * UI version strings ("v6.1.2")
+      * header comment version/date
 */
 
-// ========================================================================
-// Dynamic Electricity Ticker for XIAO ESP32C3 - VERSION 6.1.2
-// 15-MINUTE DETAIL MODE, DST / TIMEZONE FIXED (CET <-> CEST automatic)
-// ========================================================================
+ // ========================================================================
+ // Dynamic Electricity Ticker for XIAO ESP32C3 - VERSION 6.1.2
+ // 15-MINUTE DETAIL MODE, DST / TIMEZONE FIXED (CET <-> CEST automatic)
+ // ========================================================================
 
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
@@ -368,16 +360,20 @@ void connectToWiFi() {
 }
 
 // ========================================================================
-// LED HANDLING (v6.1.2 FIX: Use analogWrite consistently to avoid PWM issues)
+// LED HANDLING
 // ========================================================================
 
 void updateLeds() {
-    // v6.1.2 FIX: Use analogWrite(0) instead of digitalWrite(LOW) for proper PWM shutdown
+    // ESP32 note:
+    // Do not mix analogWrite() (LEDC PWM) with digitalWrite() on the same pin.
+    // Once PWM is attached, digitalWrite(LOW) may not fully turn off the LED.
+    // Therefore this function uses analogWrite() exclusively for whiteLedPin.
+
     if (!ledsConnected || !areLedsOn || !isTodayDataAvailable || !isTimeSynced) {
-        analogWrite(whiteLedPin, 0);  // v6.1.2: Changed from digitalWrite(LOW)
+        analogWrite(whiteLedPin, 0);
         breatheValue = 0;
         breatheDir   = 1;
-        blinkState   = false;
+        blinkState   = LOW;
         doubleBlinkCount = 0;
         return;
     }
@@ -392,14 +388,14 @@ void updateLeds() {
     int currentIntervalIndex = currentHour * 4 + quarterHourIndex;
 
     if (currentIntervalIndex >= (int)prices.size()) {
-        analogWrite(whiteLedPin, 0);  // v6.1.2: Changed from digitalWrite(LOW)
+        analogWrite(whiteLedPin, 0);
         return;
     }
 
     float currentRate = prices[currentIntervalIndex].as<float>();
 
     if (currentRate <= 0) {
-        analogWrite(whiteLedPin, 0);  // v6.1.2: Changed from digitalWrite(LOW)
+        analogWrite(whiteLedPin, 0);
         return;
     }
 
@@ -410,7 +406,6 @@ void updateLeds() {
     finalPrice /= 1000.0;
 
     if (finalPrice <= PRICE_THRESHOLD_0_05) {
-        // Breathing effect (already uses analogWrite)
         if (millis() - lastBreatheMillis > breatheInterval) {
             breatheValue += breatheDir;
             if (breatheValue >= 255 || breatheValue <= 0) {
@@ -420,33 +415,33 @@ void updateLeds() {
             lastBreatheMillis = millis();
         }
         doubleBlinkCount = 0;
+
     } else if (finalPrice <= PRICE_THRESHOLD_0_15) {
-        // Solid ON
-        analogWrite(whiteLedPin, 255);  // v6.1.2: Changed from digitalWrite(HIGH)
+        analogWrite(whiteLedPin, 255);
         doubleBlinkCount = 0;
+
     } else if (finalPrice <= PRICE_THRESHOLD_0_25) {
-        // Slow blink (1000ms)
         if (millis() - lastBlinkMillis > BLINK_INTERVAL_1000MS) {
             blinkState = !blinkState;
-            analogWrite(whiteLedPin, blinkState ? 255 : 0);  // v6.1.2: Use analogWrite
+            analogWrite(whiteLedPin, blinkState ? 255 : 0);
             lastBlinkMillis = millis();
         }
         doubleBlinkCount = 0;
+
     } else if (finalPrice <= PRICE_THRESHOLD_0_35) {
-        // Medium blink (500ms)
         if (millis() - lastBlinkMillis > BLINK_INTERVAL_500MS) {
             blinkState = !blinkState;
-            analogWrite(whiteLedPin, blinkState ? 255 : 0);  // v6.1.2: Use analogWrite
+            analogWrite(whiteLedPin, blinkState ? 255 : 0);
             lastBlinkMillis = millis();
         }
         doubleBlinkCount = 0;
+
     } else if (finalPrice <= PRICE_THRESHOLD_0_50) {
-        // Double blink pattern
         int targetBlinks = 2;
         if (doubleBlinkCount < targetBlinks * 2) {
             if (millis() - lastDoubleBlinkMillis > DOUBLE_BLINK_FAST_INTERVAL) {
                 doubleBlinkState = !doubleBlinkState;
-                analogWrite(whiteLedPin, doubleBlinkState ? 255 : 0);  // v6.1.2: Use analogWrite
+                analogWrite(whiteLedPin, doubleBlinkState ? 255 : 0);
                 lastDoubleBlinkMillis = millis();
                 doubleBlinkCount++;
             }
@@ -456,41 +451,42 @@ void updateLeds() {
                 lastDoubleBlinkMillis = millis();
             }
         }
+
     } else {
-        // Triple blink pattern (highest prices)
+        // Very high price: triple blink-ish pattern (same as before), but PWM-only.
         if (doubleBlinkCount == 0) {
             if (millis() - lastDoubleBlinkMillis > DOUBLE_BLINK_PAUSE_INTERVAL) {
-                analogWrite(whiteLedPin, 255);  // v6.1.2: Use analogWrite
+                analogWrite(whiteLedPin, 255);
                 lastDoubleBlinkMillis = millis();
                 doubleBlinkCount++;
             }
         } else if (doubleBlinkCount == 1) {
             if (millis() - lastDoubleBlinkMillis > DOUBLE_BLINK_FAST_INTERVAL) {
-                analogWrite(whiteLedPin, 0);  // v6.1.2: Use analogWrite
+                analogWrite(whiteLedPin, 0);
                 lastDoubleBlinkMillis = millis();
                 doubleBlinkCount++;
             }
         } else if (doubleBlinkCount == 2) {
             if (millis() - lastDoubleBlinkMillis > DOUBLE_BLINK_FAST_INTERVAL) {
-                analogWrite(whiteLedPin, 255);  // v6.1.2: Use analogWrite
+                analogWrite(whiteLedPin, 255);
                 lastDoubleBlinkMillis = millis();
                 doubleBlinkCount++;
             }
         } else if (doubleBlinkCount == 3) {
             if (millis() - lastDoubleBlinkMillis > DOUBLE_BLINK_FAST_INTERVAL) {
-                analogWrite(whiteLedPin, 0);  // v6.1.2: Use analogWrite
+                analogWrite(whiteLedPin, 0);
                 lastDoubleBlinkMillis = millis();
                 doubleBlinkCount++;
             }
         } else if (doubleBlinkCount == 4) {
             if (millis() - lastDoubleBlinkMillis > DOUBLE_BLINK_FAST_INTERVAL) {
-                analogWrite(whiteLedPin, 255);  // v6.1.2: Use analogWrite
+                analogWrite(whiteLedPin, 255);
                 lastDoubleBlinkMillis = millis();
                 doubleBlinkCount++;
             }
         } else if (doubleBlinkCount == 5) {
             if (millis() - lastDoubleBlinkMillis > DOUBLE_BLINK_LONG_ON_INTERVAL) {
-                analogWrite(whiteLedPin, 0);  // v6.1.2: Use analogWrite
+                analogWrite(whiteLedPin, 0);
                 lastDoubleBlinkMillis = millis();
                 doubleBlinkCount = 0;
             }
@@ -730,7 +726,7 @@ void fetchAndProcessData() {
 }
 
 // ========================================================================
-// IMPROVED "TODAY" DETECTION AND DATA PROCESSING (v6.1.1 fix retained)
+// IMPROVED "TODAY" DETECTION AND DATA PROCESSING
 // ========================================================================
 
 bool processJsonData() {
@@ -790,7 +786,7 @@ bool processJsonData() {
     lastProcessJsonAcceptedToday = true;
 
     // --------------------------------------------------------------------
-    // v6.1.1 FIX (retained in v6.1.2):
+    // v6.1.1 FIX:
     // - Include negative and zero hourly averages in min/max and average.
     // - Compute daily average using count of valid hours (validHourCount).
     // --------------------------------------------------------------------
@@ -1012,7 +1008,7 @@ void displayPrimaryList() {
 
     if (baseHour >= 21 && timeOffsetHours > 0) {
         int adjustedBase = 21;
-displayStartHour = adjustedBase + timeOffsetHours;
+        displayStartHour = adjustedBase + timeOffsetHours;
     }
 
     if (displayStartHour >= 24) {
@@ -1453,7 +1449,7 @@ void handleDataFetching() {
             // Ensure "no data" UI
             isTodayDataAvailable = false;
             displayState         = NO_DATA_OFFSET;
-            analogWrite(whiteLedPin, 0);  // v6.1.2: Use analogWrite for consistency
+            analogWrite(whiteLedPin, 0);
             displayPrices();
             // Schedule next retry in midnight logic
             scheduleAfterMidnightFailure();
@@ -1493,9 +1489,6 @@ void setup() {
     pinMode(builtinLedPin, OUTPUT);
     pinMode(whiteLedPin,   OUTPUT);
     pinMode(buttonPin,     INPUT_PULLUP);
-
-    // v6.1.2: Ensure LED starts OFF with analogWrite for consistency
-    analogWrite(whiteLedPin, 0);
 
     const int NUM_DETECTION_SAMPLES = 5;
     int high_reads = 0;
@@ -1604,7 +1597,7 @@ void loop() {
             isTodayDataAvailable = false;
             displayState         = NO_DATA_OFFSET;
             timeOffsetHours      = 0;
-            analogWrite(whiteLedPin, 0);  // v6.1.2: Use analogWrite for consistency
+            analogWrite(whiteLedPin, 0);
 
             // Start midnight phase
             midnightPhaseActive = true;
