@@ -1,3 +1,5 @@
+![Standalone ESP32 Electricity Price Ticker](device_photo.jpg)
+
 # Electricity Price Ticker for XIAO ESP32‑C3 (Energy‑Charts)
 
 This project is an Arduino‑IDE‑friendly firmware for the **Seeed XIAO ESP32‑C3** that:
