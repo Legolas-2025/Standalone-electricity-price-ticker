@@ -9,8 +9,9 @@ This project is an Arduino‑IDE‑friendly firmware for the **Seeed XIAO ESP32�
 - Uses a white LED and an optional presence sensor to give quick visual feedback.
 - Stores daily price data in **NVS** to survive reboots and reduce API calls.
 
-The latest sketch implements **Version 6.1.1**, focusing on:
+The latest sketch implements **Version 6.1.2**, focusing on:
 
+- Version 6.1.2 fix: restore correct **white LED indicator** behavior (ESP32 PWM fix; no dim glow when off).
 - Version 6.1.1 fix: Correct daily **low/high hourly markers** (now includes negative and **0.0** prices).
 - Daily (not hourly) API fetching.
 - Robust **NVS storage** of daily price data.
@@ -237,7 +238,7 @@ The LED is driven with various patterns to indicate price level; see “LED Pric
 
 ---
 
-## Firmware Features (v6.1.1)
+## Firmware Features (v6.1.2)
 
 ### Core Display & Pricing
 
@@ -262,7 +263,7 @@ The LED is driven with various patterns to indicate price level; see “LED Pric
     - Local language letters.
     - Low‑price and high‑price indicators.
 - **Daily min/max markers**:
-  - The low/high hourly indicators now consider **negative**, **0.0**, and positive prices (v6.1.1 fix).
+  - The low/high hourly indicators consider **negative**, **0.0**, and positive prices (v6.1.1 fix).
 
 ### LED Price Signalling
 
@@ -274,6 +275,11 @@ The white LED (GPIO 5) reflects the **current 15‑minute interval** price:
 - Expensive → faster blink.
 - Very expensive → complex “double‑blink with long on” pattern.
 - Negative price or no data → LED off.
+
+**Important implementation note (v6.1.2):**
+
+- On ESP32, avoid mixing PWM (`analogWrite`) and `digitalWrite` on the same LED pin.
+- The firmware now uses `analogWrite(pin, 0/255)` consistently to guarantee the LED is fully off when gated off.
 
 LED is **disabled** when:
 
@@ -558,13 +564,14 @@ If NVS does not contain valid Wi‑Fi credentials, or if connecting fails repeat
 
 ---
 
+
 ## Versioning & Changelog
 
-- **v5.5** – 15‑minute detail mode, LED based on current 15‑minute slot, improved DST handling (see file `20251027a_electricity_ticker_10_5_5_latest_DST_and_midnight_fix.ino`).
-- **v6.0.0** – First NVS‑enabled version:
-  - Store daily price data in NVS.
-  - Reduce API calls to “boot + after‑midnight”.
-  - Add NVS status section to secondary menu.
+- **v6.1.2** – LED indicator restored (broken in previous version):
+  - Avoid mixing PWM and `digitalWrite` on the same LED pin (ESP32 LEDC behavior).
+  - Ensures LED is fully off when gated off; patterns operate correctly.
+- **v6.1.1** – Daily low/high marker fix:
+  - Daily min/max and average now include negative and **0.0** prices.
 - **v6.1.0** – Midnight fetch & “today” detection fixes:
   - Correctly detect **market day** using the last `unix_seconds` timestamp.
   - Distinguish between:
@@ -574,6 +581,11 @@ If NVS does not contain valid Wi‑Fi credentials, or if connecting fails repeat
     - Two retries every 20 minutes in the first hour (~00:20, ~00:40).
     - Then hourly retries (top‑of‑hour) until today’s dataset is available.
   - Behavior on reboot and manual long‑press is unchanged, but now respects the improved “today” logic.
+- **v6.0.0** – NVS storage & daily fetch:
+  - Store daily price data in NVS.
+  - Reduce API calls to “boot + after‑midnight”.
+  - Add NVS status section to secondary menu.
+- **v5.5** – 15‑minute detail mode, LED based on current 15‑minute slot, improved DST handling (see file `20251027a_electricity_ticker_10_5_5_latest_DST_and_midnight_fix.ino`).
 
 See [`CHANGELOG.md`](./CHANGELOG.md) for more details.
 
