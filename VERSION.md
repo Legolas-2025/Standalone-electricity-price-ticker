@@ -2,6 +2,26 @@
 
 ## Current firmware
 
+- **Version:** 6.1.2  
+- **Release date:** 2026-03-11  
+- **Target MCU:** Seeed XIAO ESP32‑C3  
+- **Display:** 20x4 I²C LCD (PCF8574, default address `0x27`)  
+- **API endpoint:** `https://api.energy-charts.info/price?bzn=SI`  
+- **Resolution:** 15‑minute intervals, hourly averages for overview  
+
+## Highlights of v6.1.2
+
+- Fix: restore proper white LED price indicator behavior on ESP32 by avoiding mixing PWM (`analogWrite`) and `digitalWrite` on the same pin.
+- Fix: LED is now truly off when backlight/LED gating turns it off (no more “dim glow”).
+- Change: `updateLeds()` uses PWM only (`analogWrite(pin, 0/255)`) for off/on and blink toggles.
+
+For full details, see:
+
+- [CHANGELOG.md](./CHANGELOG.md)
+- [README.md](./README.md)
+
+## Previous firmware
+
 - **Version:** 6.1.1  
 - **Release date:** 2026-03-07  
 - **Target MCU:** Seeed XIAO ESP32‑C3  
@@ -14,12 +34,7 @@
 - Fix: daily **lowest/highest hourly price marker** now includes **negative** and **0.0** prices.
 - Fix: daily average is computed over the number of valid hours (instead of always dividing by 24 even when hours were skipped).
 
-For full details, see:
-
-- [CHANGELOG.md](./CHANGELOG.md)
-- [README.md](./README.md)
-
-## Previous firmware
+## Earlier firmware
 
 - **Version:** 6.0.0  
 - **Release date:** 2026-01-27  
