@@ -4,6 +4,82 @@ All notable changes to this project are documented here.
 
 ---
 
+## v6.2.0 – DST (Daylight Saving Time) Handling Fixed (2026‑03‑29)
+
+**Summary**
+
+This release fixes a critical bug that caused incorrect price display on DST switch days. On March 29, 2026 (the spring forward day), the ticker at 12:41 showed prices for hours 13:00, 14:00, and 15:00 instead of the correct 12:00, 13:00, and 14:00.
+
+### Problem: Arithmetic-Based Index Calculation
+
+**Root Cause (v6.0.0 – v6.1.2):**
+
+The code assumed every day has exactly 96 price entries:
+
+```cpp
+int startIndex = hourIndex * 4;  // e.g., hour 12 → index 48
+```
+
+This assumption breaks on DST switch days:
+
+| Day Type | Hours | Price Entries | Example |
+|----------|-------|---------------|---------|
+| Normal day | 24 | 96 | Array indices 0-95 |
+| Spring forward (March) | 23 | 92 | Index 48 points to wrong time |
+| Fall back (October) | 25 | 100 | Index 48 points to wrong time |
+
+At 12:41 on March 29, 2026:
+- ESP32 correctly reported `timeinfo.tm_hour = 12`
+- Old code calculated `12 × 4 = 48`
+- But array only had 92 entries (no index 48 that maps to local hour 12)
+- Result: Displayed prices for 13:00, 14:00, 15:00 instead of 12:00, 13:00, 14:00
+
+### Solution: Timestamp-Based Lookups
+
+**New approach (v6.2.0):**
+
+All price lookups now search the `unix_seconds` array using actual timestamps:
+
+```cpp
+// Find index by searching for matching hour in timestamps
+int findPriceIndexForHour(const JsonArray& unixSeconds, int targetHour) {
+    for (size_t i = 0; i < unixSeconds.size(); i++) {
+        unsigned long unixTime = unixSeconds[i].as<unsigned long>();
+        time_t t = (time_t)unixTime;
+        struct tm* ptm = localtime(&t);
+        if (ptm != NULL && ptm->tm_hour == targetHour) {
+            return (int)i;  // Found correct index for this hour
+        }
+    }
+    return -1;
+}
+```
+
+**New functions added:**
+- `findPriceIndexForHour()` – Finds first price index for a given hour
+- `findCurrentPriceIndex()` – Finds current 15-minute slot using Unix timestamp
+- `getHourFromPriceIndex()` – Gets hour from price array index
+
+**Updated functions:**
+- `getHourlyAverage()` – Now uses timestamp lookup instead of `hourIndex * 4`
+- `display15MinuteDetails()` – Timestamp-based with hour verification in loop
+- `displayPriceRow()` – Timestamp-based data index lookup
+- `displayPrimaryList()` – Timestamp-based current hour detection
+- `updateLeds()` – Timestamp-based current interval lookup
+
+### Why This Is Future-Proof
+
+| Scenario | Code Behavior |
+|----------|--------------|
+| Normal days (96 entries) | Works as before |
+| DST spring forward (92 entries) | Timestamp lookup finds correct indices |
+| DST fall back (100 entries) | Timestamp lookup finds correct indices |
+| EU cancels DST | Only update `TZ_CET_CEST` string; code works unchanged |
+
+If EU parliament ever cancels DST switching, you only need to update the `TZ_CET_CEST` line (one line of code). The price lookup logic requires no changes.
+
+---
+
 ## v6.1.2 – LED Indicator Restored (ESP32 PWM Fix) (2026‑03‑11)
 
 **Summary**
@@ -15,11 +91,11 @@ This release fixes a regression introduced in **v6.1.1** where the **white LED p
 **Problem (v6.1.1):**
 
 - The sketch uses `analogWrite()` to drive the LED with PWM for breathe/blink patterns.
-- However, in some “LED OFF” branches the code used `digitalWrite(LOW)` on the same `whiteLedPin`.
+- However, in some "LED OFF" branches the code used `digitalWrite(LOW)` on the same `whiteLedPin`.
 - On ESP32 (LEDC), once PWM is attached to a pin, `digitalWrite(LOW)` may **not fully disable** PWM output.
 - Result:
-  - LED could remain **faintly on** (dim glow) when LEDs were supposed to be off (e.g., presence timeout / backlight off).
-  - Some patterns could appear “stuck” or inconsistent.
+  - LED could remain **faintly on** (dim glow) when LEDs were supposed to be off.
+  - Some patterns could appear "stuck" or inconsistent.
 
 **Solution (v6.1.2):**
 
@@ -27,7 +103,7 @@ This release fixes a regression introduced in **v6.1.1** where the **white LED p
   - Use `analogWrite(whiteLedPin, 0)` instead of `digitalWrite(whiteLedPin, LOW)`.
   - Use `analogWrite(whiteLedPin, 255)` instead of `digitalWrite(whiteLedPin, HIGH)`.
   - Blink/double‑blink toggles now switch between PWM **0** and **255**.
-- This ensures the LED is **truly off** whenever LED output is gated off (no data, no time sync, or presence timeout).
+- This ensures the LED is **truly off** whenever LED output is gated off.
 
 ---
 
@@ -35,31 +111,25 @@ This release fixes a regression introduced in **v6.1.1** where the **white LED p
 
 **Summary**
 
-This release fixes a bug where the **daily lowest / highest hourly price marker** ignored negative prices (and also ignored 0.0), which could cause the ticker to incorrectly mark the **lowest positive[...]
+This release fixes a bug where the **daily lowest / highest hourly price marker** ignored negative prices (and also ignored 0.0), which could cause the ticker to incorrectly mark the **lowest positive** price as the daily minimum.
 
 ### Fixed: Daily Low/High Marker Ignored Negative & Zero Prices
 
 **Problem (v6.1.0):**
 
 - In `processJsonData()` the daily min/max scan used:
-
-  - `if (hourlyAvg > 0) { ... }`
-
+  ```cpp
+  if (hourlyAvg > 0) { ... }
+  ```
 - This had two side effects:
   1. **Negative** hourly averages were completely skipped.
   2. A true price of **0.0** was also skipped (even though 0 can be a valid market price).
-
-- Additionally, the daily average was computed as `sum / 24.0` even though hours were being skipped from `sum`, making the daily average incorrect whenever any hour was excluded.
 
 **Solution (v6.1.1):**
 
 - The min/max and average scan now:
   - Treats an hour as valid based on **data availability** (having all 4×15‑minute entries), not based on value sign.
-  - Includes **all values** (negative, zero, positive) when computing:
-    - `lowestPriceIndex`
-    - `highestPriceIndex`
-    - `averagePrice`
-  - Computes `averagePrice` using the number of valid hours (normally 24).
+  - Includes **all values** (negative, zero, positive).
 
 ---
 
@@ -67,112 +137,21 @@ This release fixes a bug where the **daily lowest / highest hourly price marker*
 
 **Summary**
 
-This release fixes a bug where the ticker could remain indefinitely on the **“No data for today”** screen after midnight, even though the API was already returning fresh data. It also refines the [...]
+This release fixes a bug where the ticker could remain indefinitely on the **"No data for today"** screen after midnight, even though the API was already returning fresh data.
 
 ### Fixed: Stuck on NO_DATA_OFFSET After Midnight
 
 **Problem (v6.0.0):**
 
-- After midnight, the device:
-  - Detected day rollover and entered a “no data” state.
-  - Scheduled an immediate API fetch.
-- However:
-  - The API can continue to serve **yesterday’s market day** for some time after local midnight.
-  - The code only checked the **first** `unix_seconds` entry against the current local day.
-  - HTTP + JSON success always incremented `apiSuccessCount`, even if `processJsonData()` subsequently decided the dataset was “not for today”.
-  - The scheduler treated such fetches as **successful**, pushed `nextScheduledFetchTime` 24 hours into the future, and never retried.
-  - Result: the ticker stayed on **NO_DATA_OFFSET** forever, until:
-    - A manual long‑press triggered a fresh fetch at a time when the API finally returned recognized “today” data, or
-    - The device was rebooted later in the day.
+- The API can continue to serve **yesterday's market day** for some time after local midnight.
+- HTTP + JSON success always incremented `apiSuccessCount`, even if the data was "not for today".
+- The scheduler treated such fetches as **successful** and never retried.
 
 **Solution (v6.1.0):**
 
-1. **Market Day Detection**:
-   - `processJsonData()` now determines the “market day” using the **last** `unix_seconds` timestamp from the API’s dataset (assumed to cover one full day in 15‑minute steps).
-   - It compares that calendar date (local time) against the current local date.
-   - If they differ:
-     - The dataset is treated as **“not for today”**.
-     - `isTodayDataAvailable = false`.
-     - The function returns **false**, and a new flag `lastProcessJsonAcceptedToday` remains `false`.
-
-2. **Logical Failure vs HTTP/JSON Failure**:
-   - New global flag:
-     - `lastProcessJsonAcceptedToday` – `true` only when `processJsonData()` accepts the dataset as “today’s” data.
-   - In `handleDataFetching()`:
-     - A scheduled fetch is considered a **real success** only if:
-       - HTTP + JSON succeeded, **and**
-       - `lastProcessJsonAcceptedToday == true`.
-     - In all other cases (including “HTTP 200 + parse OK but data still for yesterday”):
-       - The fetch is treated as **failure** for scheduling purposes.
-       - If `midnightPhaseActive == true`, `scheduleAfterMidnightFailure()` is invoked to plan a retry.
-
-3. **Midnight Phase Cleanup**:
-   - When a fetch finally provides a dataset for today:
-     - `isTodayDataAvailable = true`.
-     - `lastProcessJsonAcceptedToday = true`.
-     - `midnightPhaseActive` is cleared; `midnightRetryCount` reset to 0.
-     - `nextScheduledFetchTime` is set to 24 hours ahead.
-
-As a result, the ticker will **keep retrying** after midnight until a correct market‑day dataset appears, instead of giving up after the first HTTP 200.
-
----
-
-### Changed: After‑Midnight Retry Schedule
-
-In `scheduleAfterMidnightFailure()` the retry strategy when `midnightPhaseActive == true` has been tuned.
-
-**Old behavior (v6.0.0, conceptual):**
-
-- First few failures after midnight:
-  - Retried every 10 minutes up to 5 attempts.
-- Afterwards:
-  - Switched to hourly retries (top of each hour).
-
-**New behavior (v6.1.0 + user configuration):**
-
-- Fast retry phase fully contained within the **first hour after midnight**.
-- You configured:
-
-  ```cpp
-  if (midnightRetryCount < 2) {
-      // Retry every 20 minutes for first 2 attempts (~1 hour window)
-      midnightRetryCount++;
-      nextScheduledFetchTime = now + 1200; // 20 minutes
-      debugPrint(2, "Midnight retry " + String(midnightRetryCount) + "/2 in 20 minutes");
-  } else {
-      // After that, retry only at top of each hour
-      ...
-  }
-  ```
-
-- Timeline:
-  - 00:00 – initial attempt (triggered by day rollover).
-  - If dataset is still for previous day:
-    - 1st retry at ~00:20.
-    - 2nd retry at ~00:40.
-  - After that:
-    - Retries only at the **top of the next hours** (01:00, 02:00, …),
-      until a dataset with market day = today is accepted.
-
-This configuration significantly reduces overnight API load while still ensuring the ticker picks up the new day as soon as the API publishes it.
-
----
-
-### Other Behavior (Retained From v6.0.0)
-
-- **NVS caching** of daily data:
-  - On boot, if NVS contains a dataset whose date matches today’s local date:
-    - The JSON is deserialized and processed.
-    - A new API call is **skipped**.
-  - After each accepted “today” fetch:
-    - Raw JSON payload, date, and a timestamp are stored in NVS.
-- **Manual long‑press refresh**:
-  - Still triggers immediate fetch via `nextScheduledFetchTime = now;`.
-  - Now also respects the improved “today” detection; “yesterday’s” data is not accepted as today.
-- **CET/CEST time handling**:
-  - Unchanged, still uses `TZ_CET_CEST` with `configTzTime`.
-- **Secondary menu and NVS status lines**:
-  - Retained from v6.0.0; updated only for version string and minor wording.
+- `processJsonData()` now determines the "market day" using the **last** `unix_seconds` timestamp.
+- A scheduled fetch is only successful if `lastProcessJsonAcceptedToday == true`.
+- Midnight retry logic keeps trying until valid "today" data is received.
 
 ---
 
@@ -184,30 +163,9 @@ First major redesign focused on reducing API traffic and improving resilience us
 
 ### New
 
-- NVS namespace `"my-ticker"` introduced with keys:
-  - `ssid`, `pass` – Wi‑Fi credentials.
-  - `data_day`, `data_mon`, `data_year` – stored data calendar day.
-  - `data_prc` – raw JSON string from API.
-  - `data_last_store` – Unix time when data was stored.
-- Boot behavior:
-  - Try to load and validate NVS data.
-  - If date matches today → reuse it and **skip** initial API call.
-- After‑midnight behavior:
-  - NVS is overwritten with each successful new‑day dataset.
-  - In‑RAM data for yesterday is invalidated at day rollover.
-
-### UI / Menu
-
-- Primary list:
-  - 15‑minute detail for current hour.
-  - Hourly averages for current + next 2 hours.
-- Secondary list:
-  - Expanded to 20 lines to include:
-    - Time/date, last update, daily average.
-    - Wi‑Fi RSSI, IP address.
-    - API success rate, uptime.
-    - NVS status block.
-    - Credits & version line.
+- NVS namespace `"my-ticker"` with Wi‑Fi credentials and daily price data caching.
+- Boot behavior: Try to load and validate NVS data; if date matches today → reuse it and **skip** initial API call.
+- After‑midnight: NVS is overwritten with each successful new‑day dataset.
 
 ---
 
