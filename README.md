@@ -5,13 +5,23 @@
 This project is an Arduino‑IDE‑friendly firmware for the **Seeed XIAO ESP32‑C3** that:
 
 - Connects to Wi‑Fi.
-- Fetches **day‑ahead electricity prices** from [Energy‑Charts.info](https://energy-charts.info) (Bundesnetzagentur / SMARD.de).
+- Fetches **day‑ahead electricity prices** from [Energy‑Charts.info](https://energy-charts.info).
 - Computes final consumer prices (including configurable power‑company fee + VAT).
 - Displays current and upcoming prices on a **20x4 I²C 2004 LCD**.
 - Uses a white LED and an optional presence sensor to give quick visual feedback.
 - Stores daily price data in **NVS** to survive reboots and reduce API calls.
 
-The latest sketch implements **Version 6.2.0**, focusing on:
+The latest sketch implements **Version 6.2.1**.
+
+---
+
+## Version Highlights
+
+### v6.2.1 – Current Interval Fix (critical fix of v6.2.0 update)
+- Fixed display showing prices one hour ahead of the current time.
+- `findCurrentPriceIndex()` now correctly returns the current 15-minute interval.
+
+Major update sketch implements **Version 6.2.0**, focusing on:
 
 - **Version 6.2.0 FIX**: **DST (Daylight Saving Time) handling fully fixed** – the ticker now works correctly on ALL days including DST switch days (spring forward and fall back). Uses timestamp-based price lookups instead of arithmetic calculations.
 - Version 6.1.2 fix: restore correct **white LED indicator** behavior (ESP32 PWM fix; no dim glow when off).
