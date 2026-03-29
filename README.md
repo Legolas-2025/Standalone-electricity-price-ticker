@@ -11,15 +11,58 @@ This project is an Arduino‑IDE‑friendly firmware for the **Seeed XIAO ESP32�
 - Uses a white LED and an optional presence sensor to give quick visual feedback.
 - Stores daily price data in **NVS** to survive reboots and reduce API calls.
 
-The latest sketch implements **Version 6.1.2**, focusing on:
+The latest sketch implements **Version 6.2.0**, focusing on:
 
+- **Version 6.2.0 FIX**: **DST (Daylight Saving Time) handling fully fixed** – the ticker now works correctly on ALL days including DST switch days (spring forward and fall back). Uses timestamp-based price lookups instead of arithmetic calculations.
 - Version 6.1.2 fix: restore correct **white LED indicator** behavior (ESP32 PWM fix; no dim glow when off).
 - Version 6.1.1 fix: Correct daily **low/high hourly markers** (now includes negative and **0.0** prices).
 - Daily (not hourly) API fetching.
 - Robust **NVS storage** of daily price data.
 - Correct **CET/CEST** handling.
-- Resilient **after‑midnight refresh** (no more getting stuck on “No data for today”).
+- Resilient **after‑midnight refresh** (no more getting stuck on "No data for today").
 - Preserved UI and button behavior from v5.5.
+
+---
+
+## DST (Daylight Saving Time) – How It Works
+
+### v6.2.0: Fully DST-Safe
+
+**Important**: Starting with v6.2.0, the ticker is **fully DST-safe** and requires **no manual intervention** on DST switch days.
+
+The firmware uses **timestamp-based price lookups** that work correctly regardless of whether the day has 23, 24, or 25 hours:
+
+| Day Type | Hours in Day | Price Entries | Status |
+|----------|-------------|---------------|--------|
+| Normal | 24 | 96 | ✅ Works |
+| Spring forward (March) | 23 | 92 | ✅ Works (fixed in v6.2.0) |
+| Fall back (October) | 25 | 100 | ✅ Works (fixed in v6.2.0) |
+
+### Timezone Configuration
+
+The firmware uses the `TZ_CET_CEST` timezone string for displaying local time:
+
+```cpp
+const char* TZ_CET_CEST = "CET-1CEST,M3.5.0/02:00,M10.5.0/03:00";
+```
+
+**Current behavior:**
+- Spring forward: Last Sunday of March at 02:00 → 03:00 (CEST, UTC+2)
+- Fall back: Last Sunday of October at 03:00 → 02:00 (CET, UTC+1)
+
+### Future-Proof: If EU Cancels DST
+
+If the EU parliament ever cancels DST switching, you only need to update **one line of code**:
+
+```cpp
+// Option A - Stay on CET (UTC+1, winter time) permanently:
+const char* TZ_CET_CEST = "CET-1";
+
+// Option B - Stay on CEST (UTC+2, summer time) permanently:
+const char* TZ_CET_CEST = "CEST-2";
+```
+
+The rest of the code works unchanged because it uses timestamp-based lookups.
 
 ---
 
@@ -118,11 +161,12 @@ Typical pins used in the sketch:
 
 **Connections:**
 
-- **LCD backpack → XIAO ESP32‑C3**
-  - `VCC` → **5V** (or 3V3 if your module explicitly supports 3.3V I²C)
-  - `GND` → **GND**
-  - `SDA` → board I²C SDA pin (see XIAO ESP32‑C3 documentation)
-  - `SCL` → board I²C SCL pin
+| LCD Backpack | XIAO ESP32‑C3 |
+|-------------|---------------|
+| VCC | 5V |
+| GND | GND |
+| SDA | I²C SDA |
+| SCL | I²C SCL |
 
 > Note: On many XIAO ESP32‑C3 board definitions, SDA/SCL are mapped internally. Just use the default I²C pins as documented by Seeed.
 
@@ -187,12 +231,14 @@ The presence sensor is used to control LCD backlight and LEDs to save power and 
 
 Recommended module: **RCWL‑0516** microwave motion sensor.
 
-**Wiring (from the v5.5 header, preserved in v6.x):**
+**Wiring:**
 
-- `VCC` → **3.3V**
-- `GND` → **GND**
-- `OUT` → `GPIO 9` (`presencePin`)
-- **Required**: 10 kΩ pull‑down resistor between `GPIO 9` and `GND`.
+| RCWL‑0516 | Connection |
+|-----------|------------|
+| VCC | 3.3V |
+| GND | GND |
+| OUT | GPIO 9 (`presencePin`) |
+| **Required**: 10kΩ pull‑down | Between GPIO 9 and GND |
 
 Characteristics:
 
@@ -240,23 +286,16 @@ The LED is driven with various patterns to indicate price level; see “LED Pric
 
 ---
 
-## Firmware Features (v6.1.2)
+## Firmware Features (v6.2.0)
 
 ### Core Display & Pricing
 
-- Data source:
-
-  ```text
-  https://api.energy-charts.info/price?bzn=SI
-  ```
-
-- Resolution:
-  - Prices in **15‑minute intervals** (`price[]`, `unix_seconds[]`).
-  - Display shows:
-    - **Row 0**: Current hour, four 15‑minute values in compact format (`XX XX XX XX`).
-    - **Rows 1–3**: Current hour + next two hours as hourly averages.
-- Price calculation:
-  - Raw MWh prices are converted to **EUR/kWh**.
+- Data source: `https://api.energy-charts.info/price?bzn=SI`
+- Resolution: 15‑minute intervals with hourly averages
+- Display shows:
+  - **Row 0**: Current hour, four 15‑minute values
+  - **Rows 1–3**: Current hour + next two hours as hourly averages
+- Price calculation: Raw MWh → EUR/kWh with configurable surcharges (power company fee + VAT)
   - Two configurable surcharges:
     - `POWER_COMPANY_FEE_PERCENTAGE` (default `12.0` %).
     - `VAT_PERCENTAGE` (default `22.0` %).
@@ -271,14 +310,17 @@ The LED is driven with various patterns to indicate price level; see “LED Pric
 
 The white LED (GPIO 5) reflects the **current 15‑minute interval** price:
 
-- Very cheap (`<= 0.05 EUR/kWh`) → smooth breathing.
-- Cheap / normal → steady on.
-- Moderately expensive → slow blink.
-- Expensive → faster blink.
-- Very expensive → complex “double‑blink with long on” pattern.
-- Negative price or no data → LED off.
+| Price Level | LED Behavior |
+|-------------|--------------|
+| Negative / no data | LED off |
+| ≤ 0.05 EUR/kWh | Smooth breathing |
+| 0.05 – 0.15 | Steady on |
+| 0.15 – 0.25 | Slow blink |
+| 0.25 – 0.35 | Fast blink |
+| 0.35 – 0.50 | Double blink |
+| > 0.50 | Triple blink pattern |
 
-**Important implementation note (v6.1.2):**
+**Important implementation note (from v6.1.2 on):**
 
 - On ESP32, avoid mixing PWM (`analogWrite`) and `digitalWrite` on the same LED pin.
 - The firmware now uses `analogWrite(pin, 0/255)` consistently to guarantee the LED is fully off when gated off.
@@ -553,7 +595,7 @@ If NVS does not contain valid Wi‑Fi credentials, or if connecting fails repeat
    - `DNSServer` (from ESP32 core)
    - `WebServer` (from ESP32 core)
    - `Preferences` (built‑in for ESP32)
-3. Open the v6.1 `.ino` file (e.g. `20260130_electricity_ticker_6_1_nvs_daily_fetch.ino`).
+3. Open the v6.2.0 `.ino` file (e.g. `ESP32_standalone_electricity_ticker_6_1_2_nvs_daily_fetch.ino`).
 4. In Tools:
    - Board: `Seeed XIAO ESP32C3`
    - Port: choose the correct serial port.
@@ -569,6 +611,7 @@ If NVS does not contain valid Wi‑Fi credentials, or if connecting fails repeat
 
 ## Versioning & Changelog
 
+- **v6.2.0** – DST handling fully fixed via timestamp-based lookups
 - **v6.1.2** – LED indicator restored (broken in previous version):
   - Avoid mixing PWM and `digitalWrite` on the same LED pin (ESP32 LEDC behavior).
   - Ensures LED is fully off when gated off; patterns operate correctly.
