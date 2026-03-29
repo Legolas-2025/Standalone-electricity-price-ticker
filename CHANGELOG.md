@@ -4,6 +4,48 @@ All notable changes to this project are documented here.
 
 ---
 
+## v6.2.1 – Current Interval Fix (2026‑03‑29)
+
+**Summary**
+
+Fixed a bug where the display was showing prices one hour ahead of the current time.
+
+### Problem: Display Showing Next Hour Instead of Current
+
+**Root Cause:**
+
+The `findCurrentPriceIndex()` function was finding the **next** 15-minute interval (first entry with timestamp >= now), but it should find the **current** interval (the one we're currently IN).
+
+For example, at 17:57:
+- The current 15-minute interval is **17:45-18:00** (price indexed at 17:45)
+- The **next** interval is 18:00-18:15 (price indexed at 18:00)
+- The buggy function returned the index for **18:00** instead of **17:45**
+- Result: Display showed hour **18** instead of hour **17**
+
+### Solution
+
+The fix calculates the **next 15-minute boundary** and finds the last entry **strictly before** that boundary:
+
+```cpp
+// Calculate the next 15-minute boundary
+const int QUARTER_SECONDS = 15 * 60; // 900 seconds
+time_t nextQuarter = ((now + QUARTER_SECONDS - 1) / QUARTER_SECONDS) * QUARTER_SECONDS;
+
+// Find the last entry strictly before nextQuarter
+for (size_t i = unixSeconds.size(); i > 0; i--) {
+    if ((time_t)unixTime < nextQuarter) {
+        return (int)(i - 1);
+    }
+}
+```
+
+**Example:**
+- At 17:57: nextQuarter = 18:00, finds last entry < 18:00 = 17:45 ✅
+- At 18:00: nextQuarter = 18:15, finds last entry < 18:15 = 18:00 ✅
+- At 18:46: nextQuarter = 19:00, finds last entry < 19:00 = 18:45 ✅
+
+---
+
 ## v6.2.0 – DST (Daylight Saving Time) Handling Fixed (2026‑03‑29)
 
 **Summary**
