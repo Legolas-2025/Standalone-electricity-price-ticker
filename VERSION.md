@@ -2,12 +2,18 @@
 
 ## Current firmware
 
-- **Version:** 6.2.0
+- **Version:** 6.2.1
 - **Release date:** 2026-03-29
 - **Target MCU:** Seeed XIAO ESP32‑C3
 - **Display:** 20x4 I²C LCD (PCF8574, default address `0x27`)
 - **API endpoint:** `https://api.energy-charts.info/price?bzn=SI`
 - **Resolution:** 15‑minute intervals, hourly averages for overview
+
+## Highlights of v6.2.1
+
+- **BUG FIX**: Fixed `findCurrentPriceIndex()` to return the correct current interval.
+- Problem: At 17:57, it returned index for 18:00 instead of 17:45, causing display to show hour 18 instead of hour 17.
+- Fix: Now calculates next 15-minute boundary and finds the last entry before that boundary.
 
 ## Highlights of v6.2.0
 
