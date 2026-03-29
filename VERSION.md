@@ -2,18 +2,24 @@
 
 ## Current firmware
 
-- **Version:** 6.1.2  
-- **Release date:** 2026-03-11  
-- **Target MCU:** Seeed XIAO ESP32‑C3  
-- **Display:** 20x4 I²C LCD (PCF8574, default address `0x27`)  
-- **API endpoint:** `https://api.energy-charts.info/price?bzn=SI`  
-- **Resolution:** 15‑minute intervals, hourly averages for overview  
+- **Version:** 6.2.0
+- **Release date:** 2026-03-29
+- **Target MCU:** Seeed XIAO ESP32‑C3
+- **Display:** 20x4 I²C LCD (PCF8574, default address `0x27`)
+- **API endpoint:** `https://api.energy-charts.info/price?bzn=SI`
+- **Resolution:** 15‑minute intervals, hourly averages for overview
 
-## Highlights of v6.1.2
+## Highlights of v6.2.0
 
-- Fix: restore proper white LED price indicator behavior on ESP32 by avoiding mixing PWM (`analogWrite`) and `digitalWrite` on the same pin.
-- Fix: LED is now truly off when backlight/LED gating turns it off (no more “dim glow”).
-- Change: `updateLeds()` uses PWM only (`analogWrite(pin, 0/255)`) for off/on and blink toggles.
+- **CRITICAL FIX**: DST (Daylight Saving Time) handling is now fully fixed for all days.
+- Previously, the code assumed every day has exactly 96 price entries (24h × 4). This caused incorrect price display on DST switch days:
+  - Spring forward (March): Only 92 entries → wrong prices displayed
+  - Fall back (October): 100 entries → wrong prices displayed
+- **Solution**: All price lookups now use timestamp-based searching through the `unix_seconds` array instead of arithmetic calculation (`hourIndex * 4`).
+- New functions: `findPriceIndexForHour()`, `findCurrentPriceIndex()`, `getHourFromPriceIndex()`
+- Updated functions: `getHourlyAverage()`, `display15MinuteDetails()`, `displayPriceRow()`, `displayPrimaryList()`, `updateLeds()`
+- The ticker now works correctly on all days, including DST switch days, with no manual intervention.
+- **Future-proof**: If EU cancels DST, only the `TZ_CET_CEST` string needs updating (one line of code).
 
 For full details, see:
 
@@ -22,34 +28,19 @@ For full details, see:
 
 ## Previous firmware
 
-- **Version:** 6.1.1  
-- **Release date:** 2026-03-07  
-- **Target MCU:** Seeed XIAO ESP32‑C3  
-- **Display:** 20x4 I²C LCD (PCF8574, default address `0x27`)  
-- **API endpoint:** `https://api.energy-charts.info/price?bzn=SI`  
-- **Resolution:** 15‑minute intervals, hourly averages for overview  
+- **Version:** 6.1.2
+- **Release date:** 2026-03-11
+- **Target MCU:** Seeed XIAO ESP32‑C3
 
-## Highlights of v6.1.1
+## Highlights of v6.1.2
 
-- Fix: daily **lowest/highest hourly price marker** now includes **negative** and **0.0** prices.
-- Fix: daily average is computed over the number of valid hours (instead of always dividing by 24 even when hours were skipped).
+- Fix: restore proper white LED price indicator behavior on ESP32 by avoiding mixing PWM (`analogWrite`) and `digitalWrite` on the same pin.
+- Fix: LED is now truly off when backlight/LED gating turns it off (no more "dim glow").
 
 ## Earlier firmware
 
-- **Version:** 6.0.0  
-- **Release date:** 2026-01-27  
-- **Target MCU:** Seeed XIAO ESP32‑C3  
-- **Display:** 20x4 I²C LCD (PCF8574, default address `0x27`)  
-- **API endpoint:** `https://api.energy-charts.info/price?bzn=SI`  
-- **Resolution:** 15‑minute intervals, hourly averages for overview  
+- **Version:** 6.1.1 (2026-03-07) – Daily low/high marker includes negative and zero prices
+- **Version:** 6.1.0 (2026-01-30) – Midnight fetch and market day detection fixes
+- **Version:** 6.0.0 (2026-01-27) – NVS storage and daily fetch
 
-## Highlights of v6.0.0
-
-- Single **daily fetch** (on boot / after midnight) instead of hourly.
-- **NVS storage** of daily data for resilience to power outages.
-- Robust midnight rollover and retry logic:
-  - First immediate fetch.
-  - Up to 5 × 10‑minute retries.
-  - Then top‑of‑hour retries until successful.
-- Prevents yesterday’s prices from ever being shown as today’s.
-- Secondary info menu extended with **NVS status** and clear version label.
+For detailed history, see [CHANGELOG.md](./CHANGELOG.md).
