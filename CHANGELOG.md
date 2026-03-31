@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here.
 
+## v6.2.2 - Display blank lines issue fix (2026-03-31):
+
+**Summary**
+
+Fixed a bug where the display was showing blank lines
+
+### Problem: Sometimes rows 0 and 1 (current 15-min prices and current hour) were blank
+
+**Cause:** The "hour suppression" logic was hiding the current hour unexpectedly
+
+### Solution:
+
+  - Row 1 (current hour) now ALWAYS shows - suppression logic only applies to rows 2-3
+  - Row 0 (15-min details) also always shows for the current hour
+
 ---
 
 ## v6.2.1 – Current Interval Fix (2026‑03‑29)
