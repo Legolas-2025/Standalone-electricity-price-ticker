@@ -11,11 +11,15 @@ This project is an Arduino‑IDE‑friendly firmware for the **Seeed XIAO ESP32�
 - Uses a white LED and an optional presence sensor to give quick visual feedback.
 - Stores daily price data in **NVS** to survive reboots and reduce API calls.
 
-The latest sketch implements **Version 6.2.2**.
+The latest sketch implements **Version 6.2.3**.
 
 ---
 
 ## Version Highlights
+
+### v6.2.3 - State-based display refresh logic  (critical fix of v6.2.2 update)
+- Problem: Screen would occasionally fail to update if the ESP32 was busy (fetching data or reconnecting WiFi) during the exact 00/15/30/45 minute mark.
+- Fix: Switched from "Event-Based" (refresh only AT minute X) to "State-Based" (refresh IF current time != last refresh time). This ensures the screen updates immediately even if the device was busy during the transition.
 
 ### v6.2.2 - Display Blank Lines Issue Fix  (critical fix of v6.2.1 update)
   - Problem: Sometimes rows 0 and 1 (current 15-min prices and current hour) were blank.
