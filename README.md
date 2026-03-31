@@ -11,11 +11,18 @@ This project is an Arduino‑IDE‑friendly firmware for the **Seeed XIAO ESP32�
 - Uses a white LED and an optional presence sensor to give quick visual feedback.
 - Stores daily price data in **NVS** to survive reboots and reduce API calls.
 
-The latest sketch implements **Version 6.2.1**.
+The latest sketch implements **Version 6.2.2**.
 
 ---
 
 ## Version Highlights
+
+### v6.2.2 - Display Blank Lines Issue Fix  (critical fix of v6.2.1 update)
+  - Problem: Sometimes rows 0 and 1 (current 15-min prices and current hour) were blank.
+  - Cause: The "hour suppression" logic was hiding the current hour unexpectedly.
+  - Fix:
+    - Row 1 (current hour) now ALWAYS shows - suppression logic only applies to rows 2-3.
+    - Row 0 (15-min details) also always shows for the current hour.
 
 ### v6.2.1 – Current Interval Fix (critical fix of v6.2.0 update)
 - Fixed display showing prices one hour ahead of the current time.
