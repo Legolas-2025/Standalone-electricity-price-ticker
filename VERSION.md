@@ -2,12 +2,20 @@
 
 ## Current firmware
 
-- **Version:** 6.2.1
-- **Release date:** 2026-03-29
+- **Version:** 6.2.2
+- **Release date:** 2026-03-31
 - **Target MCU:** Seeed XIAO ESP32‑C3
 - **Display:** 20x4 I²C LCD (PCF8574, default address `0x27`)
 - **API endpoint:** `https://api.energy-charts.info/price?bzn=SI`
 - **Resolution:** 15‑minute intervals, hourly averages for overview
+
+ ## Highlights of v6.2.2
+
+- **BUG FIX**: Display blank lines issue
+- Problem: Sometimes rows 0 and 1 (current 15-min prices and current hour) were blank
+- Cause: The "hour suppression" logic was hiding the current hour unexpectedly
+- Fix: Row 1 (current hour) now ALWAYS shows - suppression logic only applies to rows 2-3
+- Row 0 (15-min details) also always shows for the current hour
 
 ## Highlights of v6.2.1
 
@@ -27,11 +35,6 @@
 - The ticker now works correctly on all days, including DST switch days, with no manual intervention.
 - **Future-proof**: If EU cancels DST, only the `TZ_CET_CEST` string needs updating (one line of code).
 
-For full details, see:
-
-- [CHANGELOG.md](./CHANGELOG.md)
-- [README.md](./README.md)
-
 ## Previous firmware
 
 - **Version:** 6.1.2
@@ -49,4 +52,7 @@ For full details, see:
 - **Version:** 6.1.0 (2026-01-30) – Midnight fetch and market day detection fixes
 - **Version:** 6.0.0 (2026-01-27) – NVS storage and daily fetch
 
-For detailed history, see [CHANGELOG.md](./CHANGELOG.md).
+For full details, see:
+
+- [CHANGELOG.md](./CHANGELOG.md)
+- [README.md](./README.md)
