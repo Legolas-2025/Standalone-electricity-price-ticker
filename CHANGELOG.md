@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented here.
 
+## v6.2.3 - State-based display refresh logic fix (2026-04-01):
+
+**Summary**
+
+The refresh logic should be "State-Based" rather than "Event-Based." Instead of checking if the minute is zero, it should check if the current hour is different from the last recorded hour.
+
+### Problem: Screen would occasionally fail to update if the ESP32 was busy 
+   - fetching data or reconnecting WiFi) during the exact 00/15/30/45 minute mark.
+
+### Solution: Switched from "Event-Based" (refresh only AT minute X) to "State-Based" 
+    
+    (refresh IF current time != last refresh time). 
+  - This ensures the screen updates immediately even if the device was busy during the transition.
+
+---
+
 ## v6.2.2 - Display blank lines issue fix (2026-03-31):
 
 **Summary**
