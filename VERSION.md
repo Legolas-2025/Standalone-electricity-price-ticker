@@ -2,20 +2,27 @@
 
 ## Current firmware
 
-- **Version:** 6.2.2
-- **Release date:** 2026-03-31
+- **Version:** 6.2.3
+- **Release date:** 2026-04-01
 - **Target MCU:** Seeed XIAO ESP32‑C3
 - **Display:** 20x4 I²C LCD (PCF8574, default address `0x27`)
 - **API endpoint:** `https://api.energy-charts.info/price?bzn=SI`
 - **Resolution:** 15‑minute intervals, hourly averages for overview
 
+ ## Highlights of v6.2.3
+
+- **BUG FIX**: State-based display refresh logic
+- Problem: Screen would occasionally fail to update if the ESP32 was busy (fetching data or reconnecting WiFi) during the exact 00/15/30/45 minute mark.
+- Fix: Switched from "Event-Based" (refresh only AT minute X) to "State-Based" (refresh IF current time != last refresh time). This ensures the screen updates immediately even if the device was busy during the transition.
+ 
  ## Highlights of v6.2.2
 
 - **BUG FIX**: Display blank lines issue
 - Problem: Sometimes rows 0 and 1 (current 15-min prices and current hour) were blank
 - Cause: The "hour suppression" logic was hiding the current hour unexpectedly
-- Fix: Row 1 (current hour) now ALWAYS shows - suppression logic only applies to rows 2-3
-- Row 0 (15-min details) also always shows for the current hour
+- Fix:
+  - Row 1 (current hour) now ALWAYS shows - suppression logic only applies to rows 2-3
+  - Row 0 (15-min details) also always shows for the current hour
 
 ## Highlights of v6.2.1
 
