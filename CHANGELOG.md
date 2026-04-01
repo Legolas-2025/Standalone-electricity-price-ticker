@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here.
 
+## v6.2.4 - Exact-boundary display refresh bug (2026-04-01):
+
+**Summary**
+
+Top of the hour auto display refresh glitch fix where display automatically refreshed but showed the PREVIOUS hour's data.
+
+### Problem: 
+- At the exact top of the hour (e.g., 20:00:00), the display automatically refreshed but showed the PREVIOUS hour's data (19:00). This happened because the "next-boundary" rounding logic in findCurrentPriceIndex() incorrectly excluded the current interval if the time was exactly on the boundary.
+
+### Solution: 
+- Simplified findCurrentPriceIndex() to use a robust "last entry <= now" comparison. This ensures the display transitions to the new hour instantaneously at XX:00:00.
+
+---
+
 ## v6.2.3 - State-based display refresh logic fix (2026-04-01):
 
 **Summary**
