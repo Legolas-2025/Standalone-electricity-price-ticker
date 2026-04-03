@@ -2,26 +2,75 @@
 
 ## Current firmware
 
-- **Version:** 6.2.4
-- **Release date:** 2026-04-01
+- **Version:** 7.0
+- **Release date:** 2026-04-03
 - **Target MCU:** Seeed XIAO ESP32‑C3
 - **Display:** 20x4 I²C LCD (PCF8574, default address `0x27`)
 - **API endpoint:** `https://api.energy-charts.info/price?bzn=SI`
 - **Resolution:** 15‑minute intervals, hourly averages for overview
 
- ## Highlights of v6.2.4
+## Highlights of v7.0
 
- - **BUG FIX:** Exact-boundary display refresh bug
- - Problem: At the exact top of the hour (e.g., 20:00:00), the display automatically refreshed but showed the PREVIOUS hour's data (19:00). This happened because the "next-boundary" rounding logic in findCurrentPriceIndex() incorrectly excluded the current interval if the time was exactly on the boundary.
- - Fix: Simplified findCurrentPriceIndex() to use a robust "last entry <= now" comparison. This ensures the display transitions to the new hour instantaneously at XX:00:00.
+### MAJOR UPGRADE: Rolling 48-Hour Logic & Midnight Bridge
 
- ## Highlights of v6.2.3
+This version is the **"Golden Build"** for this hardware. It represents the culmination of hardware stability fixes from v6.2.4 combined with revolutionary new 48-hour price prediction capabilities.
+
+#### 1. The Midnight Bridge (Rollover Logic)
+
+The most complex part of electricity tickers is handling the midnight transition. This code now correctly detects the moment the local clock moves from 23:59:59 to 00:00:00.
+
+**The Swap:** Instead of waiting for a slow API call at midnight (which usually fails because the server hasn't updated yet), the code instantly promotes the "Tomorrow" buffer to become "Today" data.
+
+**The NVS Update:** The code correctly serializes the new "Today" data and saves it to NVS immediately after the swap. This ensures that if power cuts at 00:05 AM, the device reboots with the correct data already loaded.
+
+#### 2. Dual-Buffer NVS System
+
+The ticker now stores "Today" and "Tomorrow" data independently in NVS:
+
+- **Today buffer (`doc`)**: Contains the current day's price data
+- **Tomorrow buffer (`docTomorrow`)**: Contains the next day's price data
+- **NVS keys**: `data_prc`/`data_day`/`data_mon`/`data_year` for today, `data_prc_t`/`data_store_t` for tomorrow
+
+#### 3. Smart Fetching & API URL
+
+The logic for fetching tomorrow's data is implemented correctly:
+
+- **URL Construction**: Adding `&start=YYYY-MM-DD` dynamically after 14:00 (2 PM) queries the Energy-Charts API for the next day
+- **Validation**: In `processJsonData()`, the code compares the timestamp in the JSON against the target date, preventing the "Tomorrow" buffer from being filled with "Today's" data if the API is lagging
+
+#### 4. Seamless 48H Scrolling
+
+If next-day data is available, the button allows scrolling up to **47 hours ahead**:
+
+- **Visual Distinction**: Using `HH:>>` for tomorrow's hours prevents the user from confusing a cheap price "tomorrow" with a cheap price "today"
+- **Index Safety**: The code correctly uses `lowestPriceIndexTomorrow` and `highestPriceIndexTomorrow` when the display is in the "tomorrow" range, ensuring the Min/Max icons appear on the correct 15-minute segments
+
+#### 5. Hardware Stability (Inherited from v6.2.4)
+
+All v6.2.4 hardware stability fixes are preserved:
+
+- **Refresh Logic**: "State-Based" refresh ensures the display updates exactly at 00, 15, 30, and 45 minutes past the hour, even if the CPU is busy with a background fetch
+- **LED Indicators**: White LED for low price and Built-in LED for connectivity remain pinned to the actual current price, even when the user is scrolling through future data on the screen
+
+#### Final "Sanity Check" Verdict
+
+**Status:** Verified. The code is safe to deploy. The transition from 15-minute intervals to the midnight rollover is now seamless. The "1 AM fetch gap" that plagues most electricity tickers has been successfully bypassed.
+
+---
+
+## Highlights of v6.2.4
+
+- **BUG FIX:** Exact-boundary display refresh bug
+- Problem: At the exact top of the hour (e.g., 20:00:00), the display automatically refreshed but showed the PREVIOUS hour's data (19:00). This happened because the "next-boundary" rounding logic in findCurrentPriceIndex() incorrectly excluded the current interval if the time was exactly on the boundary.
+- Fix: Simplified findCurrentPriceIndex() to use a robust "last entry <= now" comparison. This ensures the display transitions to the new hour instantaneously at XX:00:00.
+
+## Highlights of v6.2.3
 
 - **BUG FIX**: State-based display refresh logic
 - Problem: Screen would occasionally fail to update if the ESP32 was busy (fetching data or reconnecting WiFi) during the exact 00/15/30/45 minute mark.
 - Fix: Switched from "Event-Based" (refresh only AT minute X) to "State-Based" (refresh IF current time != last refresh time). This ensures the screen updates immediately even if the device was busy during the transition.
- 
- ## Highlights of v6.2.2
+
+## Highlights of v6.2.2
 
 - **BUG FIX**: Display blank lines issue
 - Problem: Sometimes rows 0 and 1 (current 15-min prices and current hour) were blank
