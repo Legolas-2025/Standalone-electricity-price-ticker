@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here.
 
-## v7.0 - Rolling 48-Hour Logic & Midnight Bridge (2026-04-02)
+## v7.0 - Rolling 48-Hour Logic & Midnight Bridge (2026-04-03)
 
 **Summary**
 
