@@ -783,6 +783,15 @@ See [`CHANGELOG.md`](./CHANGELOG.md) for more details.
 
 ---
 
+## Data attribution
+
+Electricity price data provided by
+**[Energy-Charts](https://energy-charts.info)** (Fraunhofer ISE)
+via the [Energy-Charts API](https://api.energy-charts.info),
+licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
+---
+
 ## License
 
 This project is licensed under the MIT License – see the [`LICENSE`](./LICENSE) file for details.
