@@ -2,6 +2,52 @@
 
 All notable changes to this project are documented here.
 
+## v7.1 - Negative Price Provider Fee (2026-04-06)
+
+**Summary**
+
+Added a separate configurable provider fee for negative spot prices, correctly
+modelling contracts where the provider's fee structure differs between positive
+and negative market prices.
+
+### What changed
+
+**New constant (in `// Price computation` globals block):**
+```cpp
+const float NEG_PRICE_COMPANY_FEE_PERCENTAGE = 30.0;
+```
+
+**Price calculation is now:**
+
+| Market price | Formula |
+|---|---|
+| Positive (`raw >= 0`) | `raw × (1 + POWER_COMPANY_FEE_PERCENTAGE/100) × (1 + VAT_PERCENTAGE/100)` |
+| Negative (`raw < 0`) | `raw × (1 - NEG_PRICE_COMPANY_FEE_PERCENTAGE/100) × (1 + VAT_PERCENTAGE/100)` |
+
+The switch happens on the **raw API price** before any multiplier is applied.
+VAT is applied to both cases, consistent with net billing contracts where VAT
+is calculated on the monthly net sum (mathematically equivalent due to VAT
+being a linear multiplier).
+
+**Key values for `NEG_PRICE_COMPANY_FEE_PERCENTAGE`:**
+
+| Value | Meaning |
+|---|---|
+| `30.0` | Provider keeps 30%, pays you 70% of the negative market price |
+| `0.0` | Provider passes the full negative price to you (no fee deducted) |
+
+**All 5 fee calculation sites updated:**
+
+| Function | Purpose |
+|---|---|
+| `updateLeds()` | LED brightness reflects correct negative price |
+| `format15MinPrice()` | 15-min row values on primary display |
+| `displayPriceRow()` | Hourly price rows on primary display |
+| `displaySecondaryList()` | Daily average on secondary info screen |
+| Version strings | `connectToWiFi()` LCD and `displaySecondaryList()` credit line |
+
+---
+
 ## v7.0 - Rolling 48-Hour Logic & Midnight Bridge (2026-04-03)
 
 **Summary**
