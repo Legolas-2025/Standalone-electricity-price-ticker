@@ -2,12 +2,38 @@
 
 ## Current firmware
 
-- **Version:** 7.0
-- **Release date:** 2026-04-03
+- **Version:** 7.1
+- **Release date:** 2026-04-06
 - **Target MCU:** Seeed XIAO ESP32‑C3
 - **Display:** 20x4 I²C LCD (PCF8574, default address `0x27`)
 - **API endpoint:** `https://api.energy-charts.info/price?bzn=SI`
 - **Resolution:** 15‑minute intervals, hourly averages for overview
+
+## Highlights of v7.1
+
+### Negative Price Provider Fee
+
+Added a separate provider fee for negative spot prices via a new constant
+`NEG_PRICE_COMPANY_FEE_PERCENTAGE`. Positive and negative market prices now
+use independent fee multipliers, correctly modelling contracts where the
+provider's fee structure differs between the two cases.
+
+**Price calculation:**
+
+| Market price | Formula |
+|---|---|
+| Positive (`raw >= 0`) | `raw × (1 + POWER_COMPANY_FEE_PERCENTAGE/100) × (1 + VAT_PERCENTAGE/100)` |
+| Negative (`raw < 0`) | `raw × (1 - NEG_PRICE_COMPANY_FEE_PERCENTAGE/100) × (1 + VAT_PERCENTAGE/100)` |
+
+VAT is applied to both, consistent with net billing where VAT is calculated
+on the monthly net sum (linear equivalence applies).
+
+All 5 fee calculation sites updated: `updateLeds()`, `format15MinPrice()`,
+`displayPriceRow()`, `displaySecondaryList()` (daily average), and version strings.
+
+See `CHANGELOG.md` for full implementation details.
+
+---
 
 ## Highlights of v7.0
 
