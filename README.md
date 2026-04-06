@@ -11,11 +11,46 @@ This project is an Arduino‑IDE‑friendly firmware for the **Seeed XIAO ESP32�
 - Uses a white LED and an optional presence sensor to give quick visual feedback.
 - Stores daily price data in **NVS** to survive reboots and reduce API calls.
 
-The latest sketch implements **Version 7.0** with the revolutionary **Rolling 48-Hour Logic & Midnight Bridge** system.
+The latest sketch implements **Version 7.1** with separate provider fee support for negative spot prices.
 
 ---
 
 ## Version Highlights
+
+### v7.1 - Negative Price Provider Fee (2026-04-06)
+
+Added a separate configurable provider fee for negative spot prices, correctly
+modelling contracts where the provider's fee structure differs between positive
+and negative market prices.
+
+**New constant:**
+```cpp
+const float NEG_PRICE_COMPANY_FEE_PERCENTAGE = 30.0;
+```
+
+**Price calculation is now:**
+
+| Market price | Formula |
+|---|---|
+| Positive (`raw >= 0`) | `raw × (1 + POWER_COMPANY_FEE_PERCENTAGE/100) × (1 + VAT_PERCENTAGE/100)` |
+| Negative (`raw < 0`) | `raw × (1 - NEG_PRICE_COMPANY_FEE_PERCENTAGE/100) × (1 + VAT_PERCENTAGE/100)` |
+
+The switch happens on the **raw API price** before any multiplier is applied.
+VAT is applied to both cases, consistent with net billing contracts where VAT
+is calculated on the monthly net sum (mathematically equivalent due to VAT
+being a linear multiplier).
+
+**Key values for `NEG_PRICE_COMPANY_FEE_PERCENTAGE`:**
+
+| Value | Meaning |
+|---|---|
+| `30.0` | Provider keeps 30%, pays you 70% of the negative market price |
+| `0.0` | Provider passes the full negative price to you (no fee deducted) |
+
+All 5 fee calculation sites updated: `updateLeds()`, `format15MinPrice()`,
+`displayPriceRow()`, `displaySecondaryList()` (daily average), and version strings.
+
+---
 
 ### v7.0 - Rolling 48-Hour Logic & Midnight Bridge (Major Upgrade)
 
@@ -37,7 +72,7 @@ This version is the **"Golden Build"** for this hardware platform. It combines a
 - **LED Indicators Pinned to Current**: White LED always reflects actual current prices
 
 ### v6.2.4 - Exact-boundary display refresh bug (critical fix of v6.2.3 update)
-- Problem: At the exact top of the hour (e.g., 20:00:00), the display automatically refreshed but showed the PREVIOUS hour's data (19:00). This happened because the "next-boundary" rounding logic in findCurrentPriceIndex() incorrectly excluded the current interval if the time was exactly on the boundary.
+- Problem: At the exact top of the hour (e.g., 20:00:00), the display automatically refreshed but showed the PREVIOUS hour's data (19:00). This happened because the "next-boundary" rounding logic in findCurrentPriceIndex() pre-calculated the next boundary.
 - Fix: Simplified findCurrentPriceIndex() to use a robust "last entry <= now" comparison. This ensures the display transitions to the new hour instantaneously at XX:00:00.
 
 ### v6.2.3 - State-based display refresh logic (critical fix of v6.2.2 update)
@@ -57,7 +92,7 @@ This version is the **"Golden Build"** for this hardware platform. It combines a
 
 Major update sketch implements **Version 6.2.0**, focusing on:
 
-- **Version 6.2.0 FIX**: **DST (Daylight Saving Time) handling fully fixed** – the ticker now works correctly on ALL days including DST switch days (spring forward and fall back). Uses timestamp-based price lookups instead of arithmetic calculations.
+- **Version 6.2.0 FIX**: **DST (Daylight Saving Time) handling fully fixed** – the ticker now works correctly on ALL days including DST switch days (spring forward and fall back). Uses timestamp-based lookups throughout.
 - Version 6.1.2 fix: restore correct **white LED indicator** behavior (ESP32 PWM fix; no dim glow when off).
 - Version 6.1.1 fix: Correct daily **low/high hourly markers** (now includes negative and **0.0** prices).
 - Daily (not hourly) API fetching.
@@ -194,16 +229,16 @@ if (dataIndex == lowIdx) {
 
 ---
 
-## Behavior & Display States (v7.0)
+## Behavior & Display States (v7.1)
 
 The display changes based on which data buffer is being used and the status of the fetch:
 
 | **State** | **Display Output** | **LED Behavior** |
 |----------|-------------------|-----------------|
 | **Normal (Today)** | Shows current prices and 15-min details. Hours are marked as HH:00. | White LED reflects current price status (Breathe, Solid, or Blink). |
-| **Scrolling (Tomorrow)** | Future prices are displayed. Hours are marked with HH:>> to indicate "Tomorrow". | **Pinned to Today:** The LEDs continue showing the _actual current_ price status even while you scroll through tomorrow. |
+| **Scrolling (Tomorrow)** | Future prices are displayed. Hours are marked with HH:>> to indicate "Tomorrow". | **Pinned to Today:** The LEDs continue showing the _actual current_ price status even while browsing future hours. |
 | **No Data** | Displays: "No data for today, Press & hold to, refresh manually." | White LED is turned **OFF** to avoid misleading price signals. |
-| **Connecting** | "Elec. Rate SI v7.0" followed by "Connecting..." and progress dots. | Built-in LED is **OFF** until connection is established. |
+| **Connecting** | "Elec. Rate SI v7.1" followed by "Connecting..." and progress dots. | Built-in LED is **OFF** until connection is established. |
 
 ### Key UX Principle: LEDs Stay Pinned to Current Time
 
@@ -264,7 +299,7 @@ const char* api_url = "https://api.energy-charts.info/price?bzn=SI";
 
 to any supported BZN.
 
-All available bidding zones (from the original README):
+All available bidding zones:
 
 - `AT` ‑ Austria
 - `BE` ‑ Belgium
@@ -318,7 +353,7 @@ All available bidding zones (from the original README):
 
 ## Hardware Setup (Detailed)
 
-This section merges the original v5.5 instructions with the current v7.0 hardware expectations.
+This section merges the original v5.5 instructions with the current v7.1 hardware expectations.
 Follow it carefully to reproduce the working setup.
 
 ### 1. Microcontroller
@@ -468,7 +503,7 @@ The LED is driven with various patterns to indicate price level; see "LED Price 
 
 ---
 
-## Firmware Features (v7.0)
+## Firmware Features (v7.1)
 
 ### Core Display & Pricing
 
@@ -478,10 +513,18 @@ The LED is driven with various patterns to indicate price level; see "LED Price 
   - **Row 0**: Current hour, four 15‑minute values
   - **Rows 1–3**: Current hour + next two hours as hourly averages
 - **v7.0 Feature**: Tomorrow's hours are marked with `HH:>>` format
-- Price calculation: Raw MWh → EUR/kWh with configurable surcharges (power company fee + VAT)
-  - Two configurable surcharges:
-    - `POWER_COMPANY_FEE_PERCENTAGE` (default `12.0` %).
-    - `VAT_PERCENTAGE` (default `22.0` %).
+- Price calculation: Raw MWh → EUR/kWh with configurable surcharges
+  - Three configurable constants:
+    - `POWER_COMPANY_FEE_PERCENTAGE` (default `12.0` %) — fee for **positive** spot prices
+    - `NEG_PRICE_COMPANY_FEE_PERCENTAGE` (default `30.0` %) — fee kept by provider on **negative** spot prices
+    - `VAT_PERCENTAGE` (default `22.0` %)
+  - **v7.1**: Positive and negative spot prices use independent fee multipliers:
+
+    | Market price | Formula |
+    |---|---|
+    | Positive (`raw >= 0`) | `raw × (1 + POWER_COMPANY_FEE_PERCENTAGE/100) × (1 + VAT_PERCENTAGE/100)` |
+    | Negative (`raw < 0`) | `raw × (1 - NEG_PRICE_COMPANY_FEE_PERCENTAGE/100) × (1 + VAT_PERCENTAGE/100)` |
+
 - LCD:
   - `LiquidCrystal_I2C` with custom characters for:
     - Local language letters.
@@ -535,7 +578,7 @@ One button (or touch) on GPIO 4 controls the UI:
   - Toggles between:
     - Primary price view.
     - Secondary status/info view.
-- **Long press (~3 seconds in v6.1)**:
+- **Long press (~3 seconds)**:
   - While held:
     - LCD shows: "Long press detected! Release to refresh".
   - On release:
@@ -676,7 +719,7 @@ In `processJsonData()`:
 
 A **secondary screen** (toggled via **double‑click**) provides 20 lines of status information, displayed 4 lines at a time:
 
-Typical content (updated for v7.0):
+Typical content (updated for v7.1):
 
 1. Current date and time (`HH:MM  DD.MM.YYYY`)
 2. Separator line (`--------------------`)
@@ -690,7 +733,7 @@ Typical content (updated for v7.0):
 10. Local IP address
 11. API success rate (`API: xx% (succ/fail)`)
 12. Device uptime in days, hours, minutes
-13–16. **NVS status block** (enhanced for v7.0):
+13–16. **NVS status block**:
     - `NVS status:`
     - `Data day: DD.MM.YYYY` or `Data day: none`
     - `Last save: DD.MM.YY` or `Last save: none`
@@ -698,8 +741,8 @@ Typical content (updated for v7.0):
 17–20. Credits and version:
     - `energy-charts.info`
     - `dynamic electricity`
-    - `price ticker v7.0`
-    - `by Legolas-2025` (or your preferred credit line)
+    - `price ticker v7.1`
+    - `by Legolas-2025`
 
 ---
 
@@ -731,7 +774,7 @@ If NVS does not contain valid Wi‑Fi credentials, or if connecting fails repeat
    - `DNSServer` (from ESP32 core)
    - `WebServer` (from ESP32 core)
    - `Preferences` (built‑in for ESP32)
-3. Open the v7.0 `.ino` file (e.g. `ESP32_standalone_electricity_ticker_v7_0_Rolling_48H.ino`).
+3. Open the v7.1 `.ino` file (`ESP32_standalone_electricity_ticker_7_1.ino`).
 4. In Tools:
    - Board: `Seeed XIAO ESP32C3`
    - Port: choose the correct serial port.
@@ -741,12 +784,18 @@ If NVS does not contain valid Wi‑Fi credentials, or if connecting fails repeat
    - NTP sync messages.
    - NVS load/save status.
    - Midnight rollover and retry debug output.
-   - **v7.0 NEW**: Tomorrow fetch logs (`Fetching Tomorrow's Data...`)
+   - Tomorrow fetch logs (`Fetching Tomorrow's Data...`)
 
 ---
 
 ## Versioning & Changelog
 
+- **v7.1** – Negative price provider fee:
+  - Separate `NEG_PRICE_COMPANY_FEE_PERCENTAGE` constant (default `30.0` %)
+  - Positive prices: `raw × (1 + pos_fee) × (1 + VAT)`
+  - Negative prices: `raw × (1 - neg_fee) × (1 + VAT)`
+  - Switch on raw API price before any multiplier
+  - All 5 fee calculation sites updated
 - **v7.0** – Rolling 48-Hour Logic & Midnight Bridge:
   - Dual-buffer NVS system for today and tomorrow data
   - Midnight Bridge for seamless day rollover
