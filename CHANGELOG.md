@@ -2,6 +2,211 @@
 
 All notable changes to this project are documented here.
 
+## v7.2 - Button Robustness & Screen-Control Fixes (2026-08-04)
+
+**Summary**
+
+Bug-fix release that resolves the three control glitches reported for the v7.1
+firmware on the Seeed XIAO ESP32‑C3:
+
+- "It is 20:35 and I cannot scroll the values of the primary screen."
+- "Double click does not switch to the secondary screen."
+- "Strange behaviour at the end of the day, if there is no tomorrow's data
+  available yet and the time is let's say 22:15."
+
+No fee/VAT math, NVS layout, API scheduling or 48-hour scrolling behaviour
+was changed. The v7.1 negative-price provider fee logic is preserved
+verbatim.
+
+### Fix 1 – Primary-screen scroll works at any hour of the day
+
+**Symptom**
+
+Clicking the button on the primary screen appeared to do nothing — the
+display stayed on the current hour and refused to advance.
+
+**Root cause (two compounding bugs)**
+
+1. `displayPriceRow()` only blanked past hours while `currentHour < 22`:
+
+   ```cpp
+   if (localHourIndex < currentHour && currentHour < 22) {
+       lcd.print("                    "); return;
+   }
+   ```
+
+   After 22:00 the guard fell through, so the screen was allowed to repaint
+   already-finished morning hours (00:00 – 21:59). The moment the user
+   scrolled forward, the new "top" hour was visually overwritten by the
+   previous morning's data, making the screen look frozen.
+
+2. `displayPrimaryList()` contained an override:
+
+   ```cpp
+   if (currentHour >= 21 && timeOffsetHours > 0) {
+       displayStartHourOffset = 21 + timeOffsetHours;
+   }
+   ```
+
+   From 21:00 onward this pinned the top row at `21 + offset`. At 22:15
+   every click computed start = 22+offset, was then clamped to 21+offset,
+   and the user saw no movement.
+
+**Fix**
+
+- `displayPriceRow()`: simplified the past-hour guard to
+  `if (localHourIndex < currentHour) blank();` so past hours of today are
+  hidden at every hour of the day, not just before 22:00.
+- `displayPrimaryList()`: removed the `currentHour >= 21` override
+  entirely. Past-hour blanking is now handled correctly by Fix 1a, so the
+  override is no longer needed.
+
+### Fix 2 – Double-click reliably toggles to the secondary screen
+
+**Symptom**
+
+A quick double-click did nothing — the display stayed on the primary
+price view. In some cases the screen showed a stuck "Long press detected!
+Release to refresh" message right after the device booted or was reset.
+
+**Root cause**
+
+The double-click path itself was correct; it was being starved by a false
+"Long press detected!" that fired immediately after every reset. On the
+ESP32-C3 the button pin (configured as `INPUT_PULLUP`) floats HIGH for a
+few seconds during boot while the internal pull-up is settling and
+power-rail noise is ringing. Because `buttonPressStartTime` is
+initialised to `0`, the long-press detector's predicate
+`millis() - buttonPressStartTime >= 3000` evaluated to
+`millis() >= 3000` a few seconds after boot — the firmware interpreted
+the floating-pin noise as a genuine 3-second hold, cleared the LCD to:
+
+```
+Long press detected!
+Release to refresh
+```
+
+…and from then on the user could not see any prices to click on
+(single- and double-click recognisers both still ran, but their visible
+effect was hidden behind the long-press splash).
+
+**Fix**
+
+Added a single new global flag and gated the long-press detector on it:
+
+```cpp
+// New flag, set true the first time the pin is observed LOW after boot
+bool buttonEverReleased = false;
+
+// In the "reading went LOW" branch:
+if (reading == LOW) {
+    buttonPressStartTime = millis();
+    longPressDetected    = false;
+    buttonEverReleased   = true;   // v7.2
+}
+
+// In the long-press trip block:
+if (buttonState == LOW && !longPressDetected && buttonEverReleased) {  // v7.2
+    if (millis() - buttonPressStartTime >= longPressThreshold) {
+        longPressDetected = true;
+        // ... show "Long press detected! Release to refresh"
+    }
+}
+```
+
+The detector now refuses to fire until the user (or the power-rail noise)
+has released the button at least once. The v7.1 button logic (50 ms
+debounce, 3 s long-press threshold, 500 ms double-click window, TTP223
+timing) is otherwise preserved verbatim.
+
+### Fix 3 – End-of-day scroll is stable with no tomorrow data
+
+**Symptom**
+
+Around 22:00 – 23:59 with no tomorrow data in the buffer, scrolling
+through the primary screen produced a screen full of blank past-hour
+rows, or wrapped the start hour back to 00:00 in a confusing way.
+
+**Root cause**
+
+`advanceDisplayOffset()` contained a hack:
+
+```cpp
+if (allowedAhead < 2 && currentHour >= 21 && !isTomorrowDataAvailable)
+    allowedAhead = 2;
+```
+
+At 22:00 (with no tomorrow data) this let the user click past hour 23
+into "24:00 / 25:00". `displayStartHourOffset` then exceeded
+`maxOffsetLimit = 23` and the wrap logic:
+
+```cpp
+if (displayStartHourOffset > maxOffsetLimit)
+    displayStartHourOffset %= (maxOffsetLimit + 1);
+```
+
+…wrapped it back to 0. Combined with the buggy past-hour blanking in
+Fix 1a, the result was a screen full of stale blank rows from 00:00 to
+21:59.
+
+**Fix**
+
+Removed the `allowedAhead = 2` hack. The natural cap is now sufficient:
+
+- 22:00 → can step 22 → 23, then wraps back to current
+- 23:00 → cannot step forward at all
+
+No wrap to 00:00 of the previous day is reachable any more, and Fix 1a
+ensures any past hour that does briefly land on the screen is blanked
+correctly.
+
+### Fix 4 (bonus) – Auto-return timer now resets on every click
+
+**Symptom**
+
+Scrolling through the 20-line secondary status page (4 lines at a time)
+did not push the 10 s auto-return-to-top timeout forward — the display
+could jump back to the primary price view mid-read.
+
+**Root cause**
+
+`lastButtonActivity` and `autoScrollExecuted` were only updated inside the
+primary-list branches of `advanceDisplayOffset()`. The secondary-list
+branch scrolled the offset but did not touch the timer.
+
+**Fix**
+
+Moved the two resets to the very top of `advanceDisplayOffset()`:
+
+```cpp
+void advanceDisplayOffset() {
+    // Any successful click (single, double, or long-press-release) ends up
+    // here, so this is the single place that resets the auto-return timer.
+    lastButtonActivity = millis();
+    autoScrollExecuted = false;
+    // ... rest of the function unchanged
+}
+```
+
+### Other changes (cosmetic / non-behavioural)
+
+- Filename and three user-visible version strings bumped to v7.2:
+  - `connectToWiFi()` splash: `"Elec. Rate SI v7.1"` → `"v7.2"`
+  - `displaySecondaryList()` credit line (line 18): `"price ticker v7.1"` → `"v7.2"`
+  - `setup()` debug banner: `"Starting Dynamic Electricity Ticker v7.1 (Neg Price Fee) - DST-SAFE"`
+    → `"Starting Dynamic Electricity Ticker v7.2 (Button Robustness) - DST-SAFE"`
+- Inline comments added at each fix site explaining what v7.1 did wrong,
+  so future maintainers do not re-introduce the overrides.
+- New global flag `bool buttonEverReleased` (see Fix 2).
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `ESP32_standalone_electricity_ticker_7_2.ino` | Filename, header comment, `buttonEverReleased` flag, `handleButton()` long-press gate, `displayPriceRow()` past-hour guard, `displayPrimaryList()` removed override, `advanceDisplayOffset()` timer reset, three version strings |
+
+---
+
 ## v7.1 - Negative Price Provider Fee (2026-04-06)
 
 **Summary**
