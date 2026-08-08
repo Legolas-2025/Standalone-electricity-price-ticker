@@ -2,12 +2,98 @@
 
 ## Current firmware
 
-- **Version:** 7.1
-- **Release date:** 2026-04-06
+- **Version:** 7.2
+- **Release date:** 2026-08-04
 - **Target MCU:** Seeed XIAO ESP32‑C3
 - **Display:** 20x4 I²C LCD (PCF8574, default address `0x27`)
 - **API endpoint:** `https://api.energy-charts.info/price?bzn=SI`
 - **Resolution:** 15‑minute intervals, hourly averages for overview
+
+## Highlights of v7.2
+
+### Button Robustness & Screen-Control Fixes
+
+Bug-fix release that resolves the three control glitches reported for the v7.1
+firmware on the Seeed XIAO ESP32‑C3: the primary screen looked unscrollable,
+double-clicks failed to switch to the secondary status screen, and the end-of-day
+behaviour (no tomorrow data yet) was unstable around 22:00–23:59. No fee/VAT
+math, NVS layout, API scheduling or 48-hour scrolling behaviour was changed.
+
+#### Fix 1 – Primary-screen scroll now works at any hour of the day
+
+Two compounding bugs in `displayPrimaryList()` and `displayPriceRow()` were
+cancelling each other out and made single-click scrolling look dead:
+
+- `displayPriceRow()` only blanked past hours while `currentHour < 22`. After
+  22:00 the screen could repaint already-finished morning hours, so as soon
+  as the user scrolled forward the new "top" hour was visually over-written
+  by the previous morning's data. The guard is now
+  `if (localHourIndex < currentHour) blank();`, so past hours of today are
+  hidden at every hour of the day.
+- `displayPrimaryList()` contained an override
+  `if (currentHour >= 21 && timeOffsetHours > 0) displayStartHourOffset = 21 + timeOffsetHours;`
+  which pinned the top row at 21:00 + offset from 21:00 onward. At 22:15
+  every click computed start = 22+offset, was then clamped to 21+offset, and
+  the user saw no movement. The override is no longer needed and has been
+  removed.
+
+#### Fix 2 – Double-click on the secondary screen now fires reliably
+
+The double-click path itself was correct; it was being starved by a false
+"Long press detected!" message that fired immediately after every reset.
+On the ESP32-C3 the button pin (`INPUT_PULLUP`) floats HIGH for a few
+seconds during boot, while `buttonPressStartTime` is initialised to `0`.
+As soon as `millis()` crossed the 3 s threshold, the long-press detector
+tripped on a phantom 3-second hold, cleared the LCD to
+"Long press detected! / Release to refresh", and from then on the user
+could not see any prices to click on (single- and double-click recognisers
+both still ran, but their visible effect was hidden behind the long-press
+splash).
+
+Fix: a new `bool buttonEverReleased` is set to `true` the first time the
+pin is observed LOW after boot, and the long-press detector is gated on
+it: `if (buttonState == LOW && !longPressDetected && buttonEverReleased)`.
+The detector refuses to fire until the user (or the power-rail noise) has
+released the button at least once. The v7.1 button logic (debounce, 3 s
+long-press threshold, 500 ms double-click window, TTP223 timing) is
+otherwise preserved verbatim.
+
+#### Fix 3 – End-of-day scroll is now stable when no tomorrow data is available
+
+`advanceDisplayOffset()` contained a hack
+`if (allowedAhead < 2 && currentHour >= 21 && !isTomorrowDataAvailable) allowedAhead = 2;`
+which at 22:00 (with no tomorrow data) let the user click past hour 23 into
+"24:00 / 25:00", where `displayStartHourOffset` wrapped back to 0 and filled
+the LCD with the now-unblanked past-hour rows. The hack has been removed;
+the natural cap is now sufficient:
+
+- **22:00** → can step 22 → 23, then wraps back to current
+- **23:00** → cannot step forward at all
+
+No wrap to 00:00 of the previous day is reachable any more.
+
+#### Fix 4 (bonus) – Auto-return timer now resets on every click
+
+`lastButtonActivity` / `autoScrollExecuted` were only updated in the
+primary-list branches of `advanceDisplayOffset()`. Scrolling the secondary
+status page therefore did not push the 10 s auto-return-to-top timeout
+forward. The two resets are now at the top of `advanceDisplayOffset()` so
+every successful click (single, double, or long-press-release) refreshes
+the timer regardless of which list is showing.
+
+#### Cosmetic / non-behavioural changes
+
+- Filename and three user-visible version strings bumped to v7.2:
+  - `connectToWiFi()` splash: `"Elec. Rate SI v7.1"` → `"v7.2"`
+  - `displaySecondaryList()` credit line: `"price ticker v7.1"` → `"v7.2"`
+  - `setup()` debug banner: `"v7.1 (Neg Price Fee)"` → `"v7.2 (Button Robustness)"`
+- Inline comments added at each fix site explaining what v7.1 did wrong,
+  so future maintainers do not re-introduce the overrides.
+- New global flag `bool buttonEverReleased` (see Fix 2).
+
+See `CHANGELOG.md` for full implementation details.
+
+---
 
 ## Highlights of v7.1
 
