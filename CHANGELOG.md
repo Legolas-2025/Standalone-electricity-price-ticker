@@ -2,6 +2,143 @@
 
 All notable changes to this project are documented here.
 
+## v7.3 - DST Edge-Case Hardening (2026-10-03)
+
+**Summary**
+
+Bug-fix release that corrects three DST-related edge cases identified by
+static analysis of the v7.2 firmware. No fee/VAT math, NVS layout, button
+logic, API scheduling or 48-hour scrolling behaviour was changed. All four
+v7.2 button/screen-control fixes are preserved verbatim.
+
+### Fix A – Date-validation gate in `processJsonData()` was a no-op (critical)
+
+**Symptom**
+
+Stale price data from a previous day, or an API payload for the wrong day,
+could be silently accepted and displayed as if it were today's data.
+
+**Root cause**
+
+C's `localtime()` returns a pointer to one shared static `struct tm`. In
+`processJsonData()` two consecutive calls were made:
+
+```cpp
+struct tm* lastDataTm  = localtime(&lastDataTime);   // ← static buffer
+struct tm* targetDayTm = localtime(&targetTime);     // ← same static buffer, overwritten
+bool sameDate = (lastDataTm->tm_mday == targetDayTm->tm_mday && ...
+```
+
+The second call overwrites the buffer that `lastDataTm` also points to.
+Both pointers then point to the same data, so the comparison is always
+`X == X` (unconditionally true). The date-validation gate was a no-op.
+
+**Fix**
+
+Replaced both calls with `localtime_r()` into two separate `struct tm`
+value variables:
+
+```cpp
+struct tm lastDataTm;
+localtime_r(&lastDataTime, &lastDataTm);
+// ...
+struct tm targetDayTm;
+localtime_r(&targetTime, &targetDayTm);
+bool sameDate = (lastDataTm.tm_mday == targetDayTm.tm_mday && ...
+```
+
+### Fix B – "Tomorrow" URL date wrong on spring-forward Saturday evening (moderate)
+
+**Symptom**
+
+On the spring-forward Saturday after ~23:00 CET, the tomorrow-fetch URL
+contained the date of the day after tomorrow (Monday) instead of tomorrow
+(Sunday), causing the API to return no data or the wrong day's data.
+
+**Root cause**
+
+Both the URL construction in `fetchAndProcessData()` and the target-date
+calculation in `processJsonData()` computed "tomorrow" by adding 86 400
+UTC seconds:
+
+```cpp
+now += 24 * 3600;
+struct tm* tmr = localtime(&now);
+```
+
+On spring-forward night the clocks skip one hour, so 86 400 UTC seconds
+span 25 local hours (23:00 CET → 00:00 CEST the day after tomorrow).
+
+**Fix**
+
+Advance the calendar day directly and re-normalise with `mktime()`, using
+a midday anchor to stay well away from the DST boundary:
+
+```cpp
+struct tm tmr;
+localtime_r(&now, &tmr);
+tmr.tm_mday += 1;
+tmr.tm_hour = 12; // midday anchor — safely away from any DST boundary
+mktime(&tmr);     // re-normalises month/year rollover and re-applies DST rules
+```
+
+The same pattern is applied in both `fetchAndProcessData()` and
+`processJsonData()` (Fix A already covers the latter via the combined
+`isTomorrow` branch).
+
+### Fix C – Fall-back day (25-hour) daily average missed the repeated 02:xx block (minor)
+
+**Symptom**
+
+On the DST fall-back day (last Sunday of October, 25 local hours), the
+daily average price and the min/max hour markers were computed over only 24
+hour blocks instead of 25, causing a ~4% error in the displayed average and
+possibly misidentifying the cheapest or most expensive hour.
+
+**Root cause**
+
+The averaging loop in `processJsonData()` iterated `for (int hour = 0; hour < 24; hour++)`.
+`findPriceIndexForHour(2)` returns the index of the **first** 02:xx block.
+The second 02:xx block (the repeated CET hour after the clocks fall back)
+was never visited.
+
+**Fix**
+
+The loop now scans the `unix_seconds` array by entry index rather than by
+hour number. It detects each new hour block by comparing consecutive entries
+and handles the second 02:xx block explicitly:
+
+```cpp
+for (size_t i = 0; i < unixSeconds.size(); i++) {
+    // Only process the first entry of each hour block
+    int entryHour = getHourFromPriceIndex(unixSeconds, (int)i);
+    if (i > 0) {
+        int prevHour = getHourFromPriceIndex(unixSeconds, (int)i - 1);
+        if (prevHour == entryHour) continue;
+    }
+    // ... compute hourlyAvg for this block, including repeated blocks
+}
+```
+
+### Other changes (cosmetic / non-behavioural)
+
+- Filename and three user-visible version strings bumped to v7.3:
+  - `connectToWiFi()` splash: `"Elec. Rate SI v7.2"` → `"v7.3"`
+  - `displaySecondaryList()` credit line: `"price ticker v7.2"` → `"v7.3"`
+  - `setup()` debug banner: `"v7.2 (Button Robustness)"` → `"v7.3 (DST Hardening)"`
+- Inline comments added at each fix site referencing the fix letter (A/B/C).
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `ESP32_standalone_electricity_ticker_7_3.ino` | New file — v7.2 base with Fixes A, B, C applied |
+| `README.md` | Version references updated to v7.3; v7.3 highlights section added |
+| `CHANGELOG.md` | v7.3 section added at top |
+| `VERSION.md` | Current firmware updated to v7.3; v7.3 highlights section added |
+
+---
+
 ## v7.2 - Button Robustness & Screen-Control Fixes (2026-08-04)
 
 **Summary**

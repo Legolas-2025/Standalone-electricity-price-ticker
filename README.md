@@ -11,15 +11,37 @@ This project is an Arduino‑IDE‑friendly firmware for the **Seeed XIAO ESP32�
 - Uses a white LED and an optional presence sensor to give quick visual feedback.
 - Stores daily price data in **NVS** to survive reboots and reduce API calls.
 
-The latest sketch implements **Version 7.2** — a bug-fix release that
-restores primary-screen scrolling, fixes double-click → secondary-screen
-switching on the ESP32-C3, and stabilises end-of-day behaviour when no
-tomorrow data is available yet. The v7.1 negative-price provider fee logic
-is preserved unchanged.
+The latest sketch implements **Version 7.3** — a DST edge-case hardening
+release that fixes date validation aliasing, tomorrow-date DST rollover, and
+fall-back day averaging on repeated local hours. No fee/VAT math, NVS layout,
+button logic, API scheduling or 48-hour scrolling behaviour was changed.
 
 ---
 
 ## Version Highlights
+
+### v7.3 - DST Edge-Case Hardening (2026-10-03)
+
+Bug-fix release that corrects three DST-related edge cases identified by
+static analysis of the v7.2 firmware. No fee/VAT math, NVS layout, button
+logic, API scheduling or 48-hour scrolling behaviour was changed.
+
+- **Fix A – Date-validation gate in `processJsonData()` was a no-op.**
+  Two consecutive `localtime()` calls return the same static pointer; the
+  second call silently overwrote the first result, making the date comparison
+  always `X == X` (unconditionally true). Stale or wrong-day payloads could
+  be accepted silently. Fixed by using `localtime_r()` into two separate
+  `struct tm` variables.
+- **Fix B – "Tomorrow" URL date wrong on spring-forward Saturday evening.**
+  Adding `+24*3600` UTC seconds near a DST boundary could land on the day
+  after tomorrow. Fixed by advancing the calendar day (`tm_mday += 1`) and
+  re-normalising with `mktime()`, using a midday anchor (12:00) to stay away
+  from DST boundary hours.
+- **Fix C – Fall-back day (25-hour) daily average was slightly off.**
+  The averaging loop iterated `hour = 0..23` and called
+  `findPriceIndexForHour(2)` once, missing the second 02:xx block on
+  DST fall-back days (100 price entries). The loop now scans by array index
+  so both 02:xx blocks are included.
 
 ### v7.2 - Button Robustness & Screen-Control Fixes (2026-08-04)
 
@@ -262,7 +284,7 @@ if (dataIndex == lowIdx) {
 
 ---
 
-## Behavior & Display States (v7.2)
+## Behavior & Display States (v7.3)
 
 The display changes based on which data buffer is being used and the status of the fetch:
 
@@ -271,7 +293,7 @@ The display changes based on which data buffer is being used and the status of t
 | **Normal (Today)** | Shows current prices and 15-min details. Hours are marked as HH:00. | White LED reflects current price status (Breathe, Solid, or Blink). |
 | **Scrolling (Tomorrow)** | Future prices are displayed. Hours are marked with HH:>> to indicate "Tomorrow". | **Pinned to Today:** The LEDs continue showing the _actual current_ price status even while browsing future hours. |
 | **No Data** | Displays: "No data for today, Press & hold to, refresh manually." | White LED is turned **OFF** to avoid misleading price signals. |
-| **Connecting** | "Elec. Rate SI v7.2" followed by "Connecting..." and progress dots. | Built-in LED is **OFF** until connection is established. |
+| **Connecting** | "Elec. Rate SI v7.3" followed by "Connecting..." and progress dots. | Built-in LED is **OFF** until connection is established. |
 
 ### Key UX Principle: LEDs Stay Pinned to Current Time
 
@@ -386,7 +408,7 @@ All available bidding zones:
 
 ## Hardware Setup (Detailed)
 
-This section merges the original v5.5 instructions with the current v7.2 hardware expectations.
+This section merges the original v5.5 instructions with the current v7.3 hardware expectations.
 Follow it carefully to reproduce the working setup.
 
 ### 1. Microcontroller
@@ -536,7 +558,7 @@ The LED is driven with various patterns to indicate price level; see "LED Price 
 
 ---
 
-## Firmware Features (v7.2)
+## Firmware Features (v7.3)
 
 ### Core Display & Pricing
 
@@ -752,7 +774,7 @@ In `processJsonData()`:
 
 A **secondary screen** (toggled via **double‑click**) provides 20 lines of status information, displayed 4 lines at a time:
 
-Typical content (updated for v7.2):
+Typical content (updated for v7.3):
 
 1. Current date and time (`HH:MM  DD.MM.YYYY`)
 2. Separator line (`--------------------`)
@@ -774,7 +796,7 @@ Typical content (updated for v7.2):
 17–20. Credits and version:
     - `energy-charts.info`
     - `dynamic electricity`
-    - `price ticker v7.2`
+    - `price ticker v7.3`
     - `by Legolas-2025`
 
 ---
@@ -807,7 +829,7 @@ If NVS does not contain valid Wi‑Fi credentials, or if connecting fails repeat
    - `DNSServer` (from ESP32 core)
    - `WebServer` (from ESP32 core)
    - `Preferences` (built‑in for ESP32)
-3. Open the v7.2 `.ino` file (`ESP32_standalone_electricity_ticker_7_2.ino`).
+3. Open the v7.3 `.ino` file (`ESP32_standalone_electricity_ticker_7_3.ino`).
 4. In Tools:
    - Board: `Seeed XIAO ESP32C3`
    - Port: choose the correct serial port.
@@ -823,6 +845,8 @@ If NVS does not contain valid Wi‑Fi credentials, or if connecting fails repeat
 
 ## Versioning & Changelog
 
+- **v7.3** – DST edge-case hardening (2026-10-03). See highlights above; full
+  details in [`CHANGELOG.md`](./CHANGELOG.md).
 - **v7.2** – Button robustness & screen-control fixes (2026-08-04). See
   highlights above; full details in [`CHANGELOG.md`](./CHANGELOG.md).
 - **v7.1** – Negative price provider fee:

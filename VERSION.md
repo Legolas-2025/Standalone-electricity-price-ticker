@@ -2,12 +2,51 @@
 
 ## Current firmware
 
-- **Version:** 7.2
-- **Release date:** 2026-08-04
+- **Version:** 7.3
+- **Release date:** 2026-10-03
 - **Target MCU:** Seeed XIAO ESP32‑C3
 - **Display:** 20x4 I²C LCD (PCF8574, default address `0x27`)
 - **API endpoint:** `https://api.energy-charts.info/price?bzn=SI`
 - **Resolution:** 15‑minute intervals, hourly averages for overview
+
+## Highlights of v7.3
+
+### DST Edge-Case Hardening
+
+Bug-fix release that corrects three DST-related edge cases identified by
+static analysis of the v7.2 firmware. No fee/VAT math, NVS layout, button
+logic, API scheduling or 48-hour scrolling behaviour was changed.
+
+#### Fix A – Date-validation gate in `processJsonData()` was a no-op
+
+Two consecutive `localtime()` calls were using the same static `struct tm`
+buffer. The second call overwrote the first result, so date comparison became
+`X == X` (always true). The gate now uses `localtime_r()` with two separate
+`struct tm` value variables.
+
+#### Fix B – "Tomorrow" date arithmetic now advances calendar day safely
+
+Computing tomorrow with `+24*3600` could produce the wrong local date on
+spring-forward Saturday evening near DST transition. The code now advances
+`tm_mday += 1`, anchors at midday (`tm_hour = 12`), and re-normalises using
+`mktime()` before formatting the API `start=YYYY-MM-DD` date.
+
+#### Fix C – Fall-back day (25-hour) averaging includes repeated 02:xx block
+
+The old `hour = 0..23` scan missed the second 02:xx block on DST fall-back
+days (100 quarter-hour entries), slightly skewing average and min/max
+identification. The scan now iterates the `unix_seconds` array by index and
+processes each hour-block start, including repeated local-hour blocks.
+
+#### Cosmetic / non-behavioural changes
+
+- New firmware file: `ESP32_standalone_electricity_ticker_7_3.ino`
+- Version strings bumped from v7.2 to v7.3 in splash/secondary/debug banner
+- Inline comments added at each fix site referencing Fix A/B/C
+
+See `CHANGELOG.md` for full implementation details.
+
+---
 
 ## Highlights of v7.2
 
