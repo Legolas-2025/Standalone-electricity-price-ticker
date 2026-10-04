@@ -11,14 +11,50 @@ This project is an Arduino‑IDE‑friendly firmware for the **Seeed XIAO ESP32�
 - Uses a white LED and an optional presence sensor to give quick visual feedback.
 - Stores daily price data in **NVS** to survive reboots and reduce API calls.
 
-The latest sketch implements **Version 7.3** — a DST edge-case hardening
-release that fixes date validation aliasing, tomorrow-date DST rollover, and
-fall-back day averaging on repeated local hours. No fee/VAT math, NVS layout,
-button logic, API scheduling or 48-hour scrolling behaviour was changed.
+The latest sketch implements **Version 7.4** — a fetch-scheduling fix that
+eliminates the afternoon/evening button freeze caused by a tight retry loop
+in the tomorrow-data fetch, adds a genuine long-press guard, and captures
+button presses via a CHANGE interrupt so they are not lost during blocking
+HTTP calls. No fee/VAT math, NVS layout, API URL construction, DST logic,
+48-hour scrolling behaviour, or Midnight Bridge logic was changed.
 
 ---
 
 ## Version Highlights
+
+### v7.4 - Fetch Scheduling Fix: Button Responsiveness (2026-10-04)
+
+Bug-fix release that eliminates the afternoon/evening button freeze. After
+14:00 local time, if the Energy-Charts API had not yet published next-day
+prices (typical until ~01:00–02:00 UTC = 03:00–04:00 CEST), the main loop
+called `fetchAndProcessData(true)` every iteration because
+`nextScheduledFetchTime` was never advanced after a failed or rejected
+fetch. Each iteration blocked the loop for 5–15 s inside `http.GET()`,
+starving `handleButton()`. No fee/VAT math, NVS layout, API URL
+construction, DST logic, 48-hour scrolling behaviour, or Midnight Bridge
+logic was changed. All four v7.3 DST fixes and all four v7.2 button/screen
+fixes are preserved verbatim.
+
+- **Fix A – Advance `nextScheduledFetchTime` after every failed tomorrow fetch.**
+  Every failure/rejection path in `fetchAndProcessData()` now advances the
+  schedule by 1800 s (30 min) when `fetchTomorrow == true`, breaking the
+  tight retry loop that starved `handleButton()` from 14:00 onward.
+- **Fix B – Belt-and-suspenders guard in `handleDataFetching()`.**
+  After calling `fetchAndProcessData(true)`, if `isTomorrowDataAvailable`
+  is still false, `nextScheduledFetchTime` is forced to at least
+  `now + 1800`. Protects against any future refactor that removes the
+  advance from the helper.
+- **Fix C – Long-press detector: only honour genuine long presses.**
+  The press handler now checks `pressDuration >= longPressThreshold`
+  before honouring `longPressDetected`. A spurious idle-time flag (the
+  detector previously measured time since last release, not press duration)
+  no longer hijacks a normal short click into a forced manual refresh.
+- **Fix D – Button edge interrupt (non-blocking press capture).**
+  A `CHANGE` interrupt on `buttonPin` sets a volatile flag. At the top of
+  `handleButton()`, if the flag is set and the pin is now released, a
+  synthetic press+release event is injected into the state machine. This
+  guarantees that a press occurring during a legitimate 10–15 s HTTP block
+  is not silently lost.
 
 ### v7.3 - DST Edge-Case Hardening (2026-10-03)
 
@@ -284,7 +320,7 @@ if (dataIndex == lowIdx) {
 
 ---
 
-## Behavior & Display States (v7.3)
+## Behavior & Display States (v7.4)
 
 The display changes based on which data buffer is being used and the status of the fetch:
 
@@ -293,7 +329,7 @@ The display changes based on which data buffer is being used and the status of t
 | **Normal (Today)** | Shows current prices and 15-min details. Hours are marked as HH:00. | White LED reflects current price status (Breathe, Solid, or Blink). |
 | **Scrolling (Tomorrow)** | Future prices are displayed. Hours are marked with HH:>> to indicate "Tomorrow". | **Pinned to Today:** The LEDs continue showing the _actual current_ price status even while browsing future hours. |
 | **No Data** | Displays: "No data for today, Press & hold to, refresh manually." | White LED is turned **OFF** to avoid misleading price signals. |
-| **Connecting** | "Elec. Rate SI v7.3" followed by "Connecting..." and progress dots. | Built-in LED is **OFF** until connection is established. |
+| **Connecting** | "Elec. Rate SI v7.4" followed by "Connecting..." and progress dots. | Built-in LED is **OFF** until connection is established. |
 
 ### Key UX Principle: LEDs Stay Pinned to Current Time
 
@@ -303,7 +339,7 @@ Unlike the display which can scroll through future hours, the white LED **always
 
 ---
 
-## API Call Intervals & Retry Strategy (v7.0)
+## API Call Intervals & Retry Strategy (v7.4)
 
 ### Primary Scheduling (Daily Fetch)
 
@@ -311,6 +347,9 @@ The device aims to maintain a rolling 48-hour data window by fetching today's an
 
 - **Initial Boot:** An API call is attempted immediately upon startup and time synchronization.
 - **Tomorrow's Data (Smart Fetching):** Starting at **14:00 (2 PM) local time**, the device begins checking for the next day's prices. It will attempt to fetch this data periodically until successful.
+
+- **Tomorrow's Data (Smart Fetching):** Starting at **14:00 (2 PM)** and ending at **23:00 local time**, the device checks for the next day's prices every **30 minutes** (max 19 attempts per day). After 23:00 no further tomorrow-fetch HTTP calls are issued; the Midnight Bridge handles the 00:00 rollover. This bounded window prevents excessive API calls that could trigger rate-limiting or IP bans.
+
 - **Midnight Rollover:** At exactly **00:00:00**, the device "promotes" tomorrow's data to the today buffer. If tomorrow's data was already successfully fetched and stored, **no API call is needed at midnight**.
 
 ### Retry Logic (Exponential Backoff)
@@ -408,7 +447,7 @@ All available bidding zones:
 
 ## Hardware Setup (Detailed)
 
-This section merges the original v5.5 instructions with the current v7.3 hardware expectations.
+This section merges the original v5.5 instructions with the current v7.4 hardware expectations.
 Follow it carefully to reproduce the working setup.
 
 ### 1. Microcontroller
@@ -558,7 +597,7 @@ The LED is driven with various patterns to indicate price level; see "LED Price 
 
 ---
 
-## Firmware Features (v7.3)
+## Firmware Features (v7.4)
 
 ### Core Display & Pricing
 
@@ -643,6 +682,8 @@ One button (or touch) on GPIO 4 controls the UI:
       - `handleDataFetching()` will perform an immediate API fetch outside the normal schedule.
 
 An **auto‑scroll timeout** resets the view to "current hour / top of lists" after inactivity.
+
+**v7.4 note:** A CHANGE interrupt on buttonPin captures presses that occur during blocking HTTP fetches, so a click is never silently lost. The long-press handler now requires a genuine press duration ≥ 3 s before triggering a forced refresh, preventing spurious idle-time triggers.
 
 ---
 
@@ -750,6 +791,8 @@ if (ti->tm_hour >= 14 && !isTomorrowDataAvailable) {
 
 The API URL is constructed with the `&start=YYYY-MM-DD` parameter for the next day.
 
+**v7.4 scheduling guarantee:** Every failed or rejected tomorrow fetch now advances nextScheduledFetchTime by 1800 s (30 min), preventing a tight retry loop that would block the main loop and starve handleButton(). Additionally, handleDataFetching() contains a belt-and-suspenders guard that forces the schedule forward if the helper somehow fails to advance it.
+
 ### "Today" Detection (Market Day Logic)
 
 The Energy‑Charts API can keep serving **yesterday's** market day for some time after local midnight.
@@ -774,7 +817,7 @@ In `processJsonData()`:
 
 A **secondary screen** (toggled via **double‑click**) provides 20 lines of status information, displayed 4 lines at a time:
 
-Typical content (updated for v7.3):
+Typical content (updated for v7.4):
 
 1. Current date and time (`HH:MM  DD.MM.YYYY`)
 2. Separator line (`--------------------`)
@@ -796,7 +839,7 @@ Typical content (updated for v7.3):
 17–20. Credits and version:
     - `energy-charts.info`
     - `dynamic electricity`
-    - `price ticker v7.3`
+    - `price ticker v7.4`
     - `by Legolas-2025`
 
 ---
@@ -829,7 +872,7 @@ If NVS does not contain valid Wi‑Fi credentials, or if connecting fails repeat
    - `DNSServer` (from ESP32 core)
    - `WebServer` (from ESP32 core)
    - `Preferences` (built‑in for ESP32)
-3. Open the v7.3 `.ino` file (`ESP32_standalone_electricity_ticker_7_3.ino`).
+3. Open the v7.4 `.ino` file (`ESP32_standalone_electricity_ticker_7_3.ino`).
 4. In Tools:
    - Board: `Seeed XIAO ESP32C3`
    - Port: choose the correct serial port.
@@ -845,6 +888,8 @@ If NVS does not contain valid Wi‑Fi credentials, or if connecting fails repeat
 
 ## Versioning & Changelog
 
+- **v7.4** – Fetch scheduling fix: button responsiveness (2026-10-04). 
+  See highlights above; full details in [CHANGELOG.md](./CHANGELOG.md).
 - **v7.3** – DST edge-case hardening (2026-10-03). See highlights above; full
   details in [`CHANGELOG.md`](./CHANGELOG.md).
 - **v7.2** – Button robustness & screen-control fixes (2026-08-04). See
