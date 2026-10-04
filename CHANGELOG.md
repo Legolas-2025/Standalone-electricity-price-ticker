@@ -2,6 +2,129 @@
 
 All notable changes to this project are documented here.
 
+## v7.4 – Fetch Scheduling Fix: Button Responsiveness (2026-10-04)
+
+**Summary**
+
+Bug-fix release that eliminates the afternoon/evening button freeze.
+The root cause was a tight retry loop in the tomorrow-data fetch: after
+14:00 local time, if the Energy-Charts API had not yet published next-day
+prices (typical until ~01:00–02:00 UTC = 03:00–04:00 CEST), the main loop
+called fetchAndProcessData(true) every iteration because
+nextScheduledFetchTime was never advanced after a failed or rejected
+fetch. Each iteration blocked the loop for 5–15 s inside http.GET(),
+starving handleButton(). The display still updated (it runs after the
+HTTP block), but the button was only sampled for ~1 ms per iteration.
+
+No fee/VAT math, NVS layout, API URL construction, DST logic, 48-hour
+scrolling behaviour, or Midnight Bridge logic was changed. All four v7.3
+DST fixes and all four v7.2 button/screen fixes are preserved verbatim.
+
+### Fix A – Advance nextScheduledFetchTime after every failed tomorrow fetch
+
+**Symptom**
+
+Button unresponsive from ~14:00 until the API publishes tomorrow's data
+(typically 03:00–04:00 CEST). Display continues to show correct prices.
+The freeze "reverts to normal" once isTomorrowDataAvailable flips true.
+
+**Root cause**
+
+In fetchAndProcessData(), the failure paths (HTTP error, JSON parse
+error, data rejected by processJsonData()) only advanced
+nextScheduledFetchTime when fetchTomorrow == false. For tomorrow
+fetches the schedule was never advanced, so the next loop iteration
+immediately retried, creating a tight loop that blocked the main loop
+for 10–15 s per attempt.
+
+**Fix**
+
+Every failure/rejection path in fetchAndProcessData() now advances
+nextScheduledFetchTime by 1800 s (30 min) when fetchTomorrow == true:
+
+No-WiFi bail-out: nextScheduledFetchTime = now + 1800
+HTTP error (response code ≤ 0): nextScheduledFetchTime = now + 1800
+JSON parse error: nextScheduledFetchTime = now + 1800
+Data returned but rejected by processJsonData(): nextScheduledFetchTime = now + 1800
+
+### Fix B – Belt-and-suspenders guard in `handleDataFetching()`
+
+After calling fetchAndProcessData(true), if isTomorrowDataAvailable
+is still false, nextScheduledFetchTime is forced to at least
+now + 1800. This protects against any future refactor that removes
+the advance from the helper.
+
+The tomorrow-fetch window is now capped at 23:00 local time: the condition 
+in handleDataFetching() is ti->tm_hour >= 14 && ti->tm_hour <= 23. After 
+23:00 no further tomorrow HTTP calls are issued; the Midnight Bridge 
+in loop() handles the 00:00 rollover instead. This caps the worst-case retry count 
+at 19 attempts (14:00 → 23:00, every 30 min) within a single calendar day.
+
+### Fix C – Long-press detector: only honour genuine long presses
+
+**Symptom**
+
+After 3 s of idle (no button press), the long-press detector fired
+because buttonPressStartTime records the time of the last release,
+not the start of a press. The "3-second hold" check
+(millis() - buttonPressStartTime >= 3000) actually measured idle time.
+After it fired, longPressDetected = true persisted, and the next
+press (even a normal short click) triggered a forced manual refresh
+(nextScheduledFetchTime = now), blocking the loop for another 10–15 s.
+
+**Fix**
+
+The press handler now checks pressDuration >= longPressThreshold before
+honouring longPressDetected:
+
+```cpp
+if (longPressDetected && pressDuration >= longPressThreshold) {
+    // genuine long press → manual refresh
+} else if (pressDuration < longPressThreshold) {
+    // normal short press → single/double click
+}
+```
+
+A spurious idle-time flag no longer hijacks a normal click.
+
+### Fix D – Button edge interrupt (non-blocking press capture)
+
+A CHANGE interrupt on buttonPin sets a volatile flag. At the top of
+handleButton(), if the flag is set and the pin is now released, a
+synthetic press+release event is injected into the state machine. This
+guarantees that a press occurring during a legitimate 10–15 s HTTP block
+is not silently lost.
+
+```cpp
+volatile bool buttonInterruptFired = false;
+
+void IRAM_ATTR buttonISR() {
+    buttonInterruptFired = true;
+}
+
+// In setup():
+attachInterrupt(digitalPinToInterrupt(buttonPin), buttonISR, CHANGE);
+```
+
+### Other changes (cosmetic / non-behavioural)
+
+- Filename bumped to v7.4: ESP32_standalone_electricity_ticker_7_4.ino
+- Three user-visible version strings bumped from v7.3 to v7.4:
+- connectToWiFi() splash: "Elec. Rate SI v7.3" → "v7.4"
+- displaySecondaryList() credit line: "price ticker v7.3" → "v7.4"
+- setup() debug banner: "v7.3 (DST Hardening)" → "v7.4 (Fetch Scheduling Fix)"
+- Inline comments added at each fix site referencing Fix A/B/C/D.
+
+### Files changed
+| File	| Change |
+|---|---|
+| `ESP32_standalone_electricity_ticker_7_4.ino`	| New file — v7.3 base with Fixes A, B, C, D applied |
+| `README.md`	| Version references updated to v7.4; v7.4 highlights section added |
+| `CHANGELOG.md`	| v7.4 section added at top |
+| `VERSION.md` |	Current firmware updated to v7.4; v7.4 highlights section added |
+
+---
+
 ## v7.3 - DST Edge-Case Hardening (2026-10-03)
 
 **Summary**
