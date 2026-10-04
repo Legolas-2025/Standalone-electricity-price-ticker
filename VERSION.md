@@ -2,12 +2,96 @@
 
 ## Current firmware
 
-- **Version:** 7.3
-- **Release date:** 2026-10-03
+- **Version:** 7.4
+- **Release date:** 2026-10-04
 - **Target MCU:** Seeed XIAO ESP32‑C3
 - **Display:** 20x4 I²C LCD (PCF8574, default address `0x27`)
 - **API endpoint:** `https://api.energy-charts.info/price?bzn=SI`
 - **Resolution:** 15‑minute intervals, hourly averages for overview
+
+## Highlights of v7.4
+
+### Fetch Scheduling Fix: Button Responsiveness
+
+Bug-fix release that eliminates the afternoon/evening button freeze.
+After 14:00 local time, if the Energy-Charts API had not yet published
+next-day prices (typical until ~01:00–02:00 UTC = 03:00–04:00 CEST), the
+main loop called `fetchAndProcessData(true)` every iteration because
+`nextScheduledFetchTime` was never advanced after a failed or rejected
+fetch. Each iteration blocked the loop for 5–15 s inside `http.GET()`,
+starving `handleButton()`. The display still updated, but the button was
+only sampled for ~1 ms per iteration.
+
+No fee/VAT math, NVS layout, API URL construction, DST logic, 48-hour
+scrolling behaviour, or Midnight Bridge logic was changed. All four v7.3
+DST fixes (A/B/C) and all four v7.2 button/screen fixes (1/2/3/4) are
+preserved verbatim.
+
+#### Fix A – Advance `nextScheduledFetchTime` after every failed tomorrow fetch
+
+Every failure/rejection path in `fetchAndProcessData()` now advances
+`nextScheduledFetchTime` by 1800 s (30 min) when `fetchTomorrow == true`:
+
+- No-WiFi bail-out: `nextScheduledFetchTime = now + 1800`
+- HTTP error (response code ≤ 0): `nextScheduledFetchTime = now + 1800`
+- JSON parse error: `nextScheduledFetchTime = now + 1800`
+- Data returned but rejected by `processJsonData()`: `nextScheduledFetchTime = now + 1800`
+
+This breaks the tight retry loop that starved `handleButton()` from 14:00
+onward.
+
+#### Fix B – Belt-and-suspenders guard in `handleDataFetching()`
+
+After calling `fetchAndProcessData(true)`, if `isTomorrowDataAvailable` is
+still false, `nextScheduledFetchTime` is forced to at least `now + 1800`.
+This protects against any future refactor that removes the advance from the
+helper.
+
+The tomorrow-fetch window is bounded to 14:00–23:00 (`ti->tm_hour >= 14 && ti->tm_hour <= 23`). 
+After 23:00 the Midnight Bridge takes over; at most 19 retry attempts are made per day.
+
+#### Fix C – Long-press detector: only honour genuine long presses
+
+The long-press detector in `handleButton()` recorded `buttonPressStartTime`
+at RELEASE time, so the "3-second hold" check (`millis() -
+buttonPressStartTime >= 3000`) actually measured idle time since the last
+release, not press duration. After 3 s of idle the detector fired, set
+`longPressDetected = true`, and the NEXT press (even a normal short click)
+triggered a forced manual refresh (`nextScheduledFetchTime = now`), blocking
+the loop for another 10–15 s.
+
+Fix: the press handler now checks `pressDuration >= longPressThreshold`
+before honouring `longPressDetected`. A spurious idle-time flag no longer
+hijacks a normal click.
+
+#### Fix D – Button edge interrupt (non-blocking press capture)
+
+A `CHANGE` interrupt on `buttonPin` sets a volatile flag. At the top of
+`handleButton()`, if the flag is set and the pin is now released, a synthetic
+press+release event is injected into the state machine. This guarantees that
+a press occurring during a legitimate 10–15 s HTTP block is not silently
+lost.
+
+```cpp
+volatile bool buttonInterruptFired = false;
+
+void IRAM_ATTR buttonISR() {
+    buttonInterruptFired = true;
+}
+
+// In setup():
+attachInterrupt(digitalPinToInterrupt(buttonPin), buttonISR, CHANGE);
+```
+### Cosmetic / non-behavioural changes
+
+- New firmware file: `ESP32_standalone_electricity_ticker_7_4.ino`
+- Version strings bumped from v7.3 to v7.4 in splash/secondary/debug banner:
+- connectToWiFi() splash: `"Elec. Rate SI v7.3"` → `"Elec. Rate SI v7.4"`
+- `displaySecondaryList()` credit line: `"price ticker v7.3"` → `"price ticker v7.4"`
+- `setup()` debug banner: `"v7.3 (DST Hardening)"` → `"v7.4 (Fetch Scheduling Fix)"`
+- Inline comments added at each fix site referencing Fix A/B/C/D.
+- New global flag `volatile bool buttonInterruptFired` (see Fix D).
+- See `CHANGELOG.md` for full implementation details.
 
 ## Highlights of v7.3
 
