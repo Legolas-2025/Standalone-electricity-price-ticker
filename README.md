@@ -346,8 +346,6 @@ Unlike the display which can scroll through future hours, the white LED **always
 The device aims to maintain a rolling 48-hour data window by fetching today's and tomorrow's data at specific times:
 
 - **Initial Boot:** An API call is attempted immediately upon startup and time synchronization.
-- **Tomorrow's Data (Smart Fetching):** Starting at **14:00 (2 PM) local time**, the device begins checking for the next day's prices. It will attempt to fetch this data periodically until successful.
-
 - **Tomorrow's Data (Smart Fetching):** Starting at **14:00 (2 PM)** and ending at **23:00 local time**, the device checks for the next day's prices every **30 minutes** (max 19 attempts per day). After 23:00 no further tomorrow-fetch HTTP calls are issued; the Midnight Bridge handles the 00:00 rollover. This bounded window prevents excessive API calls that could trigger rate-limiting or IP bans.
 
 - **Midnight Rollover:** At exactly **00:00:00**, the device "promotes" tomorrow's data to the today buffer. If tomorrow's data was already successfully fetched and stored, **no API call is needed at midnight**.
@@ -784,7 +782,8 @@ In the main `loop()`:
 After 14:00 local time, if tomorrow's data is not yet available:
 
 ```cpp
-if (ti->tm_hour >= 14 && !isTomorrowDataAvailable) {
+// v7.4: window capped to 14:00–23:00 (see Fix B in CHANGELOG)
+if (ti->tm_hour >= 14 && ti->tm_hour <= 23 && !isTomorrowDataAvailable) {
     fetchAndProcessData(true); // Fetch tomorrow's data
 }
 ```
@@ -872,7 +871,7 @@ If NVS does not contain valid Wi‑Fi credentials, or if connecting fails repeat
    - `DNSServer` (from ESP32 core)
    - `WebServer` (from ESP32 core)
    - `Preferences` (built‑in for ESP32)
-3. Open the v7.4 `.ino` file (`ESP32_standalone_electricity_ticker_7_3.ino`).
+3. Open the v7.4 `.ino` file (`ESP32_standalone_electricity_ticker_7_4.ino`).
 4. In Tools:
    - Board: `Seeed XIAO ESP32C3`
    - Port: choose the correct serial port.
