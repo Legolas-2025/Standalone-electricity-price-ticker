@@ -11,18 +11,62 @@ This project is an Arduino‑IDE‑friendly firmware for the **Seeed XIAO ESP32�
 - Uses a white LED and an optional presence sensor to give quick visual feedback.
 - Stores daily price data in **NVS** to survive reboots and reduce API calls.
 
-The latest sketch implements **Version 7.5** — DST `mktime()` hardening,
-explicit date bounds on today's API fetch, a complete sweep of the
-remaining non-reentrant `localtime()` call-sites, a real fall-back-day
-bug in the daily average / min-max calculation, and two small additions
-to the fetch path. No fee/VAT math, NVS layout, 48-hour scrolling
-behaviour, Midnight Bridge logic, or button handling was changed.
+The latest sketch implements **Version 7.6**, building on v7.5: DST `mktime()` hardening, explicit date bounds on today's API fetch, a complete sweep of the remaining non-reentrant `localtime()` call-sites and the fall-back-day fix in the daily average / min-max calculation all carry over unchanged. New in v7.6: the button path is rebuilt so a touch gesture survives a blocking HTTP fetch (Fix J), the tomorrow fetch asks for exactly one market day (Fix H) and the touch-pad polarity is declared once as `BUTTON_ACTIVE_HIGH` (Fix I). Fee/VAT math, NVS layout, 48-hour scrolling behaviour and Midnight Bridge logic are unchanged.
 
 ---
 
 ## Version Highlights
 
-### v7.5 - DST Hardening + API URL Date Bounds + Fall-Back Average Fix (2026-10-10)
+### v7.6 - Gesture-Safe Button + Single-Market-Day Tomorrow Fetch (2026-10-10)
+
+Two changes on top of v7.5: the button path is rebuilt so a touch gesture
+survives a blocking HTTP fetch, and the tomorrow fetch asks for exactly one
+market day instead of an open-ended window. Fee/VAT math, NVS layout, 48-hour
+scrolling behaviour, Midnight Bridge logic and all DST logic are unchanged,
+and all v7.5 fixes (A-F2), all v7.4 scheduling fixes (A, B, E, G) and all
+v7.2 button/screen fixes (1, 2, 4) are preserved.
+
+- **Fix H - `&start=&end=` on the tomorrow fetch too.** The tomorrow request
+  sent `&start=<tomorrow>` with no `&end=`. On the Energy-Charts API `end` is
+  inclusive and defaults to the end of the available window, so the request
+  returned several market days that `processJsonData()` then parsed and
+  discarded - a payload several times larger than needed, on the slowest path
+  in the firmware. Both fetches now use the same `start == end`
+  single-market-day contract.
+- **Fix I - polarity declared once as `BUTTON_ACTIVE_HIGH`.** The pin was read
+  as `!digitalRead(buttonPin)`, which is correct only for the active-HIGH
+  TTP223, while every surrounding comment described it as active-LOW. The
+  polarity now lives in one constant (default `true` = TTP223, matching the
+  documented hardware; set `false` for a mechanical pushbutton) and everything
+  downstream speaks in terms of pressed / not pressed through
+  `buttonIsPressed()` and `buttonReadingToState()`.
+- **Fix J - gestures are captured by the ISR, not reconstructed by the loop.**
+  The interrupt now timestamps both edges and pushes a `(start, end)`
+  millisecond pair onto an 8-slot FIFO; `handleButton()` drains it and
+  classifies each gesture from its measured duration. A press plus release
+  that completes entirely inside a 10-15 s `http.GET()` is no longer lost, and
+  the 500 ms `doubleClickWindow` is anchored to the real gesture times rather
+  than to the loop drain times.
+- **Verified:** a behavioural simulation of `buttonISR()`,
+  `processButtonPress()` and `handleButton()` driven with the firmware's own
+  constants passes all 14 scenarios, including a click, a long press and a
+  double-click made during a 12 s blocked fetch.
+- **Compiled and flashed:** `ESP32_standalone_electricity_ticker_7_6.ino` builds
+  for the Seeed XIAO ESP32C3 (`esp32:esp32:XIAO_ESP32C3`, ESP32 Arduino core
+  3.3.12) and has been uploaded to the board and run.
+- **On-device gestures confirmed:** the board boots with `Button interrupt
+  attached on GPIO 4 (active-HIGH: TTP223 touch pad)`; four double-clicks each
+  toggled the list - two pairs 4.4 s and 5.2 s apart stayed four separate
+  gestures instead of merging - and a long press printed the live
+  `Long press threshold reached` feedback and then reported
+  `Long press detected … (measured 3347 ms)`, so the classification really does
+  come from the measured duration. A click made **during** a blocked fetch has
+  not yet been re-timed on the touch pad.
+
+See [`CHANGELOG.md`](./CHANGELOG.md) for full implementation details and
+verification data.
+
+### v7.5 - DST Hardening + API URL Date Bounds + Fall-Back Average Fix
 
 Changes from v7.4: DST hardening, explicit API URL date bounds, a complete
 `localtime_r()` sweep, a real fall-back-day bug in the daily average, and two
@@ -391,7 +435,7 @@ if (dataIndex == lowIdx) {
 
 ---
 
-## Behavior & Display States (v7.5)
+## Behavior & Display States (v7.6)
 
 The display changes based on which data buffer is being used and the status of the fetch:
 
@@ -400,7 +444,7 @@ The display changes based on which data buffer is being used and the status of t
 | **Normal (Today)** | Shows current prices and 15-min details. Hours are marked as HH:00. | White LED reflects current price status (Breathe, Solid, or Blink). |
 | **Scrolling (Tomorrow)** | Future prices are displayed. Hours are marked with HH:>> to indicate "Tomorrow". | **Pinned to Today:** The LEDs continue showing the _actual current_ price status even while browsing future hours. |
 | **No Data** | Displays: "No data for today, Press & hold to, refresh manually." | White LED is turned **OFF** to avoid misleading price signals. |
-| **Connecting** | "Elec. Rate SI v7.5" followed by "Connecting..." and progress dots. | Built-in LED is **OFF** until connection is established. |
+| **Connecting** | "Elec. Rate SI v7.6" followed by "Connecting..." and progress dots. | Built-in LED is **OFF** until connection is established. |
 
 ### Key UX Principle: LEDs Stay Pinned to Current Time
 
@@ -410,7 +454,7 @@ Unlike the display which can scroll through future hours, the white LED **always
 
 ---
 
-## API Call Intervals & Retry Strategy (v7.5)
+## API Call Intervals & Retry Strategy (v7.6)
 
 ### Primary Scheduling (Daily Fetch)
 
@@ -418,7 +462,7 @@ The device aims to maintain a rolling 48-hour data window by fetching today's an
 
 - **Initial Boot:** An API call is attempted immediately upon startup and time synchronization.
 - **Today's Data:** Requested with explicit `&start=YYYY-MM-DD&end=YYYY-MM-DD` bounds for the current local date (v7.5 Fix B), so the returned window never depends on server-side caching of the bare endpoint.
-- **Tomorrow's Data (Smart Fetching):** Starting at **14:00 (2 PM)** and ending at **23:00 local time**, the device checks for the next day's prices every **30 minutes** (max 19 attempts per day). After 23:00 no further tomorrow-fetch HTTP calls are issued; the Midnight Bridge handles the 00:00 rollover. This bounded window prevents excessive API calls that could trigger rate-limiting or IP bans.
+- **Tomorrow's Data (Smart Fetching):** Requested with the same explicit `&start=YYYY-MM-DD&end=YYYY-MM-DD` bounds, with `start == end` for tomorrow's local date (v7.6 Fix H). Starting at **14:00 (2 PM)** and ending at **23:00 local time**, the device checks for the next day's prices every **30 minutes** (max 19 attempts per day). After 23:00 no further tomorrow-fetch HTTP calls are issued; the Midnight Bridge handles the 00:00 rollover. This bounded window prevents excessive API calls that could trigger rate-limiting or IP bans.
 
 - **Midnight Rollover:** At exactly **00:00:00**, the device "promotes" tomorrow's data to the today buffer. If tomorrow's data was already successfully fetched and stored, **no API call is needed at midnight**.
 
@@ -463,9 +507,10 @@ const char* api_url = "https://api.energy-charts.info/price?bzn=SI";
 
 to any supported BZN.
 
-> **Note (v7.5 Fix B):** `api_url` is the *base* URL. The firmware appends
-> `&start=YYYY-MM-DD` (tomorrow's fetch) or `&start=YYYY-MM-DD&end=YYYY-MM-DD`
-> (today's fetch) at request time. The Energy-Charts API treats `end` as
+> **Note (v7.5 Fix B, extended to both fetches by v7.6 Fix H):**
+> `api_url` is the *base* URL. Both fetches append
+> `&start=YYYY-MM-DD&end=YYYY-MM-DD` at request time, with `start == end` for
+> the target day. The Energy-Charts API treats `end` as
 > **inclusive** and interprets both dates in **local exchange time**, so
 > `start == end` returns exactly one market day — 96 entries normally,
 > 92 on a spring-forward day and 100 on a fall-back day.
@@ -524,7 +569,7 @@ All available bidding zones:
 
 ## Hardware Setup (Detailed)
 
-This section merges the original v5.5 instructions with the current v7.5 hardware expectations.
+This section merges the original v5.5 instructions with the current v7.6 hardware expectations.
 Follow it carefully to reproduce the working setup.
 
 ### 1. Microcontroller
@@ -560,58 +605,63 @@ Typical pins used in the sketch:
 
 ---
 
-### 3. Pushbutton (Default) / Capacitive Touch Alternative
+### 3. Pushbutton or TTP223 Capacitive Touch Pad
 
-The firmware assumes a **momentary pushbutton** on `GPIO 4` by default.
+Two interchangeable inputs are supported on `GPIO 4`, and they are inverted
+with respect to each other. Since v7.6 (Fix I) the difference is expressed by
+one constant instead of by editing every read site:
 
-#### Mechanical Pushbutton (default config)
+```cpp
+static const bool BUTTON_ACTIVE_HIGH = true;   // true = TTP223, false = mechanical
+```
 
-- One leg → `GPIO 4`
-- Other leg → `GND`
-- No external pull‑up is required; code uses:
+The pin is always configured with an internal pull-up, which is harmless for
+both options because the TTP223 drives its output push-pull:
 
 ```cpp
 pinMode(buttonPin, INPUT_PULLUP);
 ```
 
-And reads the button as **active‑LOW**:
+#### Mechanical Pushbutton (set `BUTTON_ACTIVE_HIGH = false`)
 
-```cpp
-int reading = !digitalRead(buttonPin);
-```
+- One leg to `GPIO 4`
+- Other leg to `GND`
+- No external pull-up is required.
+- The pin reads **LOW when pressed**, so `BUTTON_ACTIVE_HIGH` must be set to
+  `false`.
 
-So:
-
-- Button **pressed** ⇒ `reading == 1`
-- Button **released** ⇒ `reading == 0`
-
-#### Alternative: TTP223 Capacitive Touch Button
-
-If you prefer a TTP223 capacitive touch input instead of a mechanical button:
+#### TTP223 Capacitive Touch Pad (default, `BUTTON_ACTIVE_HIGH = true`)
 
 **Wiring:**
 
-- `VCC` → **3.3V**
-- `GND` → **GND**
-- `OUT` → `GPIO 4` (same as the pushbutton pin)
+- `VCC` to **3.3V**
+- `GND` to **GND**
+- `OUT` to `GPIO 4` (same as the pushbutton pin)
 
 **Logic:**
 
-- TTP223 output is **HIGH when touched**.
+- The TTP223 output is **HIGH when touched**, which is what the default
+  `BUTTON_ACTIVE_HIGH = true` expects.
 
-If you use TTP223, you may want to **remove the logical inversion** in the code:
+#### How the polarity is used
+
+Both options are read through the same two helpers, so nothing else in the
+firmware has to know which hardware is fitted:
 
 ```cpp
-// For mechanical button (active LOW):
-int reading = !digitalRead(buttonPin);
+inline bool buttonIsPressed() {
+    return digitalRead(buttonPin) == (BUTTON_ACTIVE_HIGH ? HIGH : LOW);
+}
 
-// For TTP223 (active HIGH), change to:
-int reading = digitalRead(buttonPin);
+// Maps the physical polarity onto the Arduino debounce convention
+// (LOW == pressed, HIGH == released) used inside handleButton().
+inline int buttonReadingToState() {
+    return buttonIsPressed() ? LOW : HIGH;
+}
 ```
 
-Everything else (debounce, long‑press, double‑click) remains compatible.
-
----
+Everything else (debounce, long-press feedback, double-click, the ISR gesture
+FIFO) is identical for both options.
 
 ### 4. Presence Sensor (RCWL‑0516, optional but supported)
 
@@ -674,7 +724,7 @@ The LED is driven with various patterns to indicate price level; see "LED Price 
 
 ---
 
-## Firmware Features (v7.5)
+## Firmware Features (v7.6)
 
 ### Core Display & Pricing
 
@@ -760,7 +810,8 @@ One button (or touch) on GPIO 4 controls the UI:
 
 An **auto‑scroll timeout** resets the view to "current hour / top of lists" after inactivity.
 
-**v7.4 note:** A CHANGE interrupt on buttonPin captures presses that occur during blocking HTTP fetches, so a click is never silently lost. The long-press handler now requires a genuine press duration ≥ 3 s before triggering a forced refresh, preventing spurious idle-time triggers.
+**v7.4 / v7.5 note:** A CHANGE interrupt on buttonPin captured presses that occurred during blocking HTTP fetches, and the long-press handler required a genuine press duration of at least 3 s before triggering a forced refresh.
+**v7.6 note (Fix J):** that interrupt now records whole gestures rather than "an edge happened" - it timestamps both the touch-start and the release and queues the pair in an 8-slot FIFO, so a click, a double-click or a long press made while the loop is parked inside `http.GET()` is classified from its measured duration instead of being lost or reconstructed from the pin. The live "Long press detected! / Release to refresh" LCD feedback is unchanged.
 
 ---
 
@@ -872,11 +923,7 @@ if (tomorrowWindow && !isTomorrowDataAvailable) {
 }
 ```
 
-The API URL is constructed with the `&start=YYYY-MM-DD` parameter for the next
-day. Today's fetch uses `&start=YYYY-MM-DD&end=YYYY-MM-DD` for the current local
-date (v7.5 Fix B); both are built from `localtime_r()` + a midday-anchored
-calendar-day increment with `tm_isdst = -1` set before `mktime()`, so the date
-is correct on DST transition days.
+Both fetches build `&start=YYYY-MM-DD&end=YYYY-MM-DD` with `start == end` for the target local date - today's fetch since v7.5 Fix B, the tomorrow fetch since v7.6 Fix H. Both dates come from `localtime_r()` plus a midday-anchored calendar-day increment with `tm_isdst = -1` set before `mktime()`, so the date is correct on DST transition days.
 
 **v7.4 scheduling guarantee:** Every failed or rejected tomorrow fetch now advances nextScheduledFetchTime by 1800 s (30 min), preventing a tight retry loop that would block the main loop and starve handleButton(). Additionally, handleDataFetching() contains a belt-and-suspenders guard that forces the schedule forward if the helper somehow fails to advance it.
 
@@ -904,7 +951,7 @@ In `processJsonData()`:
 
 A **secondary screen** (toggled via **double‑click**) provides 20 lines of status information, displayed 4 lines at a time:
 
-Typical content (updated for v7.5):
+Typical content (updated for v7.6):
 
 1. Current date and time (`HH:MM  DD.MM.YYYY`)
 2. Separator line (`--------------------`)
@@ -926,7 +973,7 @@ Typical content (updated for v7.5):
 17–20. Credits and version:
     - `energy-charts.info`
     - `dynamic electricity`
-    - `price ticker v7.5`
+    - `price ticker v7.6`
     - `by Legolas-2025`
 
 ---
@@ -959,7 +1006,7 @@ If NVS does not contain valid Wi‑Fi credentials, or if connecting fails repeat
    - `DNSServer` (from ESP32 core)
    - `WebServer` (from ESP32 core)
    - `Preferences` (built‑in for ESP32)
-3. Open the v7.5 `.ino` file (`ESP32_standalone_electricity_ticker_7_5.ino`).
+3. Open the v7.6 `.ino` file (`ESP32_standalone_electricity_ticker_7_6.ino`).
 4. In Tools:
    - Board: `Seeed XIAO ESP32C3`
    - Port: choose the correct serial port.
@@ -973,23 +1020,24 @@ If NVS does not contain valid Wi‑Fi credentials, or if connecting fails repeat
 
 ---
 
-## Known Issues / Not Yet Fixed (v7.5)
+## Known Issues / Not Yet Fixed (v7.5, status after v7.6)
 
-Two issues are known and deliberately **not** fixed in v7.5. Both are
-**intermittent**, both are **pre-existing** (v7.4 behaved identically), and
-neither has a code fix in this release — this section is documentation only.
+Two issues were recorded during v7.5 testing. Neither was fixed in v7.5, where
+this section was documentation only. v7.6 (Fix J) resolves the second one
+outright and changes the cost of the first: the freeze is still a freeze, but it
+no longer swallows the gesture.
 
-### 1. Brief UI freeze during a double-click
+### 1. Brief UI freeze during a double-click - still open
 
-On a double-click (primary ↔ secondary screen) the indicator LED stops blinking
+On a double-click (primary to secondary screen) the indicator LED stops blinking
 for a second or several, and the screen switch only completes when the freeze
 ends.
 
 The button logic is **not** at fault: `toggleList()` only flips `currentList`
 and redraws the LCD. The freeze is the blocking `http.GET()` inside
-`handleDataFetching()` — while the loop is parked in that call, `handleButton()`
+`handleDataFetching()` - while the loop is parked in that call, `handleButton()`
 and `updateLeds()` never run, so the LED simply holds its last PWM value and
-button events queue in the ISR.
+button gestures queue in the ISR.
 
 `Config::HTTP_TIMEOUT` (10 s) and `HTTP_CONNECT_TIMEOUT` (5 s) bound TCP connect
 and socket reads but **not** DNS resolution, which ESP32 lwIP performs
@@ -997,7 +1045,7 @@ synchronously. A multi-second stall is therefore consistent with a DNS lookup,
 and raising those two constants would not help.
 
 Why it is intermittent: in normal operation a fetch is due roughly every 30
-minutes, so the exposed window is only the request's own duration — a fraction
+minutes, so the exposed window is only the request's own duration - a fraction
 of a percent of the time. It becomes noticeably more likely in a degraded state
 (today's data missing, or the API returning the wrong day), where the retry
 cadence drops to 10 minutes.
@@ -1007,31 +1055,56 @@ preceded by:
 
 ```text
 HTTP GET TODAY rc=200 took 4000 ms
-  ^ slow request: loop was blocked for 4000 ms (button edges queued in ISR, applied after)
+  ^ slow request: loop was blocked for 4000 ms (gestures queued in ISR, applied after)
 ```
 
-The 10-second auto-return to the primary screen (`autoScrollTimeout` →
+The 10-second auto-return to the primary screen (`autoScrollTimeout` to
 `resetDisplayToTop()`) does no network work, so it never freezes.
 
-### 2. A double-click can collapse to a single click during a freeze
+**What changed in v7.6:** the freeze no longer loses the gesture. Edges are
+recorded by the ISR as timed gestures (Fix J), so a click made while the loop is
+parked is applied as soon as the loop returns rather than being reconstructed
+from a pin that has already returned to idle. Eliminating the freeze itself
+still requires porting the fetch to the asynchronous `esp_http_client` API -
+deliberately not undertaken here.
 
-If both presses of a double-click land inside one blocking fetch, the screen
-scrolls instead of switching lists. `buttonInterruptFired` is a `volatile bool`
-(line 501) — it records *that* an edge occurred, not *how many* — so when the
-loop resumes, `handleButton()` synthesises exactly **one** press+release pair
-and two real presses are reported as one. A double-click straddling the end of
-a freeze fails the same way, because the 500 ms `doubleClickWindow` has already
-expired by the time the second press is processed.
+### 2. A double-click collapsing to a single click during a freeze - fixed in v7.6
 
-This is dormant whenever no fetch is in flight. It is recorded here so that a
-future "the buttons went flaky again" report is not mistaken for a new
-regression. Fixing it — and the freeze above — means counting edges in the ISR
-and making the fetch non-blocking. Neither is a small patch, so both are
-deferred rather than rushed into this release.
+In v7.5, if both presses of a double-click landed inside one blocking fetch the
+screen scrolled instead of switching lists. `buttonInterruptFired` was a
+`volatile bool` recording *that* an edge occurred, not *how many*, so
+`handleButton()` synthesised exactly **one** press+release pair and two real
+presses were reported as one. A double-click straddling the end of a freeze
+failed the same way, because the 500 ms `doubleClickWindow` had already expired
+by the time the second press was processed.
+
+v7.6 Fix J removes both halves of that failure. The ISR pushes a timed
+`(start, end)` millisecond pair per gesture onto an 8-slot FIFO,
+`handleButton()` drains one gesture per loop iteration, and the double-click
+window is compared against the gestures' own timestamps rather than against the
+loop's drain times. Two clicks made four seconds apart during a blocked fetch
+now produce two separate advances, and a genuine double-click performed during a
+fetch is still recognised as a double.
+
+The FIFO holds 8 slots, so more than 7 gestures during a single unusually long
+fetch are dropped rather than queued indefinitely.
 
 ---
-
 ## Versioning & Changelog
+- **v7.6** - Gesture-safe button + single-market-day tomorrow fetch
+  (2026-10-10):
+  - Tomorrow fetch now sends `&start=<date>&end=<date>` with `start == end`
+  - Button polarity declared once as `BUTTON_ACTIVE_HIGH`; every read goes
+    through `buttonIsPressed()` / `buttonReadingToState()`
+  - The ISR records complete timed gestures into an 8-slot FIFO and
+    `handleButton()` classifies each one from its measured duration
+  - Double-click detection anchored to ISR gesture timestamps, so a gesture made
+    during a blocking fetch survives
+  - v7.5 known issue (b) is fixed; known issue (a) is still a freeze but no
+    longer loses the gesture - see
+    [Known Issues / Not Yet Fixed](#known-issues--not-yet-fixed-v75-status-after-v76).
+  - See highlights above; full details in [`CHANGELOG.md`](./CHANGELOG.md).
+
 
 - **v7.5** – DST hardening + API URL date bounds + fall-back average fix
   (2026-10-07):
@@ -1042,8 +1115,9 @@ deferred rather than rushed into this release.
   - Forward-progress guard so a rejected fetch cannot re-enter in a tight loop
   - HTTP request duration measured instead of guarded
   - No fetch started within 800 ms of a button edge
-  - Two issues remain open and unfixed — see
-    [Known Issues / Not Yet Fixed](#known-issues--not-yet-fixed-v75).
+  - Two issues were recorded; the double-click collapse is fixed in v7.6, the
+    freeze itself is still open — see
+    [Known Issues / Not Yet Fixed](#known-issues--not-yet-fixed-v75-status-after-v76).
   - See highlights above; full details in [`CHANGELOG.md`](./CHANGELOG.md).
 - **v7.4** – Fetch scheduling fix: button responsiveness (2026-10-04). 
   See highlights above; full details in [CHANGELOG.md](./CHANGELOG.md).
