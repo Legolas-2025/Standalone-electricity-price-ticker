@@ -2,7 +2,7 @@
   ESP32_standalone_electricity_ticker_7_5.ino
   -----------------------------------------------------
 
-  VERSION 7.5 CHANGES (2026-10-07):
+  VERSION 7.5 CHANGES (2026-10-10):
   ----------------------------------
   Changes from v7.4: DST hardening, explicit API URL date bounds, a
   complete localtime_r() sweep, a real fall-back-day bug in the daily
