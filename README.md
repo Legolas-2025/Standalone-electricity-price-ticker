@@ -11,16 +11,87 @@ This project is an Arduino‑IDE‑friendly firmware for the **Seeed XIAO ESP32�
 - Uses a white LED and an optional presence sensor to give quick visual feedback.
 - Stores daily price data in **NVS** to survive reboots and reduce API calls.
 
-The latest sketch implements **Version 7.4** — a fetch-scheduling fix that
-eliminates the afternoon/evening button freeze caused by a tight retry loop
-in the tomorrow-data fetch, adds a genuine long-press guard, and captures
-button presses via a CHANGE interrupt so they are not lost during blocking
-HTTP calls. No fee/VAT math, NVS layout, API URL construction, DST logic,
-48-hour scrolling behaviour, or Midnight Bridge logic was changed.
+The latest sketch implements **Version 7.5** — DST `mktime()` hardening,
+explicit date bounds on today's API fetch, a complete sweep of the
+remaining non-reentrant `localtime()` call-sites, a real fall-back-day
+bug in the daily average / min-max calculation, and two small additions
+to the fetch path. No fee/VAT math, NVS layout, 48-hour scrolling
+behaviour, Midnight Bridge logic, or button handling was changed.
 
 ---
 
 ## Version Highlights
+
+### v7.5 - DST Hardening + API URL Date Bounds + Fall-Back Average Fix (2026-10-10)
+
+Changes from v7.4: DST hardening, explicit API URL date bounds, a complete
+`localtime_r()` sweep, a real fall-back-day bug in the daily average, and two
+small additions to the fetch path. Button handling, fee/VAT math, NVS layout,
+48-hour scrolling behaviour and Midnight Bridge logic are unchanged, and all
+v7.3 and v7.4 fixes are preserved verbatim.
+
+- **Fix A – `tm_isdst = -1` before `mktime()`.** The calendar-day increment
+  (`tm_mday += 1; tm_hour = 12`) was followed by `mktime()` without resetting
+  `tm_isdst`, so the source day's DST state leaked into the normalisation. Both
+  sites now set it first.
+  *Measured:* the ±1 h offset is real, but the midday anchor keeps the calendar
+  day — the only part this firmware consumes — correct either way, so this is
+  defensive hardening rather than a reachable mis-display in v7.4.
+- **Fix B – Explicit `&start=&end=` on today's fetch URL.** Today's fetch no
+  longer uses the bare `api_url`, removing the dependence on server-side
+  caching of the bare endpoint.
+  *Verified against the live API:* `end` is **inclusive**, so `start == end`
+  returns exactly one market day (96 entries normally, 92 on a spring-forward
+  day, 100 on a fall-back day), interpreted in local exchange time. The
+  reported stale two-month-old window did not reproduce at the time of
+  writing, so this is hardening against a non-deterministic server default.
+- **Fix C – `localtime()` → `localtime_r()` (8 call-sites, 7 functions).**
+  `localtime()` returns a pointer to a single shared static `struct tm`, so
+  every call invalidates the previous result. `handleDataFetching()` is the one
+  that mattered — it dereferenced the result with **no NULL check**, which
+  would have been a NULL dereference during the busiest part of the day.
+- **Fix D – DST-aware hour-block detection in the daily average.** On the
+  fall-back day local 02:00 occurs **twice**, so the day holds 25 hour-blocks
+  and 100 quarter-hour entries. The average / min-max loop compared `tm_hour`
+  alone, so the second 02:xx block was skipped entirely — averaging 24 blocks
+  instead of 25, and misplacing the low/high marker if that block held the
+  day's extreme. Block detection now compares `tm_hour` **and** `tm_isdst`.
+  *Verified:* on a simulated 25-hour fall-back day the loop went from 24
+  blocks averaged to 25, and a −30.00 minimum that was previously invisible is
+  correctly located. The 24-row display still shows the first 02:xx block,
+  which is correct for a 24-row layout — only the aggregates changed.
+- **Fix E – today-fetch no longer spins the loop in a blocking `http.GET()`.**
+  Both rejection branches advanced `nextScheduledFetchTime` only when
+  `fetchTomorrow` was true, so a rejected today-fetch left the schedule in the
+  past and `handleDataFetching()` re-entered on the next iteration — a
+  blocking request every loop iteration. Simulated: 12 fetches / 6000 ms
+  blocked before, 1 fetch / 500 ms after. A single forward-progress guard now
+  matches the v7.4 Fix B guard on the tomorrow path.
+  *Note:* the gap is identical in v7.4 — this is not a v7.5 regression. Fix B
+  reduces how often it is entered.
+- **Fix F2 – the HTTP request is measured rather than guarded.** A wall-clock
+  stall guard was considered and not adopted: it would have had to measure
+  `millis()` *after* `http.GET()` had already returned, so it could not
+  prevent any blocking while risking the discard of a large but valid
+  response. Every request now prints its actual duration instead, so a future
+  freeze is measurable on the serial monitor.
+- **Fix G – no fetch is *started* while the user is pressing the button.** The
+  ISR records the time of the last physical edge; `handleDataFetching()` returns
+  early if that edge was under 800 ms ago, which covers the full double-click
+  window plus the confirmation wait. The fetch is only *deferred*, never
+  cancelled, so the data still arrives.
+- **Cosmetic.** Version strings bumped to v7.5; the long-press log line now
+  carries the measured press duration.
+
+**Known limitation.** `http.GET()` is still synchronous and this ESP32-C3 is
+single-core, so an in-flight fetch still pauses the display and LED animation.
+Fix G makes a fetch/click collision much less likely but does not make an
+in-progress fetch non-blocking; removing the freeze requires porting the fetch
+to the asynchronous `esp_http_client` API — a substantial rewrite deliberately
+not undertaken here. A second limitation, inherited unchanged from v7.4: a
+bounce gap within ~10 ms of the 50 ms `debounceDelay` can split one press into
+two. Any fixed threshold has that edge, and real tactile switches bounce far
+below it.
 
 ### v7.4 - Fetch Scheduling Fix: Button Responsiveness (2026-10-04)
 
@@ -320,7 +391,7 @@ if (dataIndex == lowIdx) {
 
 ---
 
-## Behavior & Display States (v7.4)
+## Behavior & Display States (v7.5)
 
 The display changes based on which data buffer is being used and the status of the fetch:
 
@@ -329,7 +400,7 @@ The display changes based on which data buffer is being used and the status of t
 | **Normal (Today)** | Shows current prices and 15-min details. Hours are marked as HH:00. | White LED reflects current price status (Breathe, Solid, or Blink). |
 | **Scrolling (Tomorrow)** | Future prices are displayed. Hours are marked with HH:>> to indicate "Tomorrow". | **Pinned to Today:** The LEDs continue showing the _actual current_ price status even while browsing future hours. |
 | **No Data** | Displays: "No data for today, Press & hold to, refresh manually." | White LED is turned **OFF** to avoid misleading price signals. |
-| **Connecting** | "Elec. Rate SI v7.4" followed by "Connecting..." and progress dots. | Built-in LED is **OFF** until connection is established. |
+| **Connecting** | "Elec. Rate SI v7.5" followed by "Connecting..." and progress dots. | Built-in LED is **OFF** until connection is established. |
 
 ### Key UX Principle: LEDs Stay Pinned to Current Time
 
@@ -339,13 +410,14 @@ Unlike the display which can scroll through future hours, the white LED **always
 
 ---
 
-## API Call Intervals & Retry Strategy (v7.4)
+## API Call Intervals & Retry Strategy (v7.5)
 
 ### Primary Scheduling (Daily Fetch)
 
 The device aims to maintain a rolling 48-hour data window by fetching today's and tomorrow's data at specific times:
 
 - **Initial Boot:** An API call is attempted immediately upon startup and time synchronization.
+- **Today's Data:** Requested with explicit `&start=YYYY-MM-DD&end=YYYY-MM-DD` bounds for the current local date (v7.5 Fix B), so the returned window never depends on server-side caching of the bare endpoint.
 - **Tomorrow's Data (Smart Fetching):** Starting at **14:00 (2 PM)** and ending at **23:00 local time**, the device checks for the next day's prices every **30 minutes** (max 19 attempts per day). After 23:00 no further tomorrow-fetch HTTP calls are issued; the Midnight Bridge handles the 00:00 rollover. This bounded window prevents excessive API calls that could trigger rate-limiting or IP bans.
 
 - **Midnight Rollover:** At exactly **00:00:00**, the device "promotes" tomorrow's data to the today buffer. If tomorrow's data was already successfully fetched and stored, **no API call is needed at midnight**.
@@ -390,6 +462,13 @@ const char* api_url = "https://api.energy-charts.info/price?bzn=SI";
 ```
 
 to any supported BZN.
+
+> **Note (v7.5 Fix B):** `api_url` is the *base* URL. The firmware appends
+> `&start=YYYY-MM-DD` (tomorrow's fetch) or `&start=YYYY-MM-DD&end=YYYY-MM-DD`
+> (today's fetch) at request time. The Energy-Charts API treats `end` as
+> **inclusive** and interprets both dates in **local exchange time**, so
+> `start == end` returns exactly one market day — 96 entries normally,
+> 92 on a spring-forward day and 100 on a fall-back day.
 
 All available bidding zones:
 
@@ -445,7 +524,7 @@ All available bidding zones:
 
 ## Hardware Setup (Detailed)
 
-This section merges the original v5.5 instructions with the current v7.4 hardware expectations.
+This section merges the original v5.5 instructions with the current v7.5 hardware expectations.
 Follow it carefully to reproduce the working setup.
 
 ### 1. Microcontroller
@@ -595,7 +674,7 @@ The LED is driven with various patterns to indicate price level; see "LED Price 
 
 ---
 
-## Firmware Features (v7.4)
+## Firmware Features (v7.5)
 
 ### Core Display & Pricing
 
@@ -750,7 +829,7 @@ This ensures power-failure resilience: if power is lost immediately after midnig
 
 ### Time Sync & First Fetch
 
-- `configTzTime(TZ_CET_CEST, "pool.ntp.org")` is used to enable CET/CEST aware `localtime()` and `getLocalTime()`.
+- `configTzTime(TZ_CET_CEST, "pool.ntp.org")` is used to enable CET/CEST aware `localtime_r()` and `getLocalTime()`.
 - Until time sync completes, the UI only shows "Syncing Time… Please wait…".
 - On first successful sync:
   - `isTimeSynced = true`.
@@ -763,7 +842,7 @@ In the main `loop()`:
 
 - `trackedDay` holds the last seen local day.
 - Each iteration:
-  - Get `localtime()` for `now`.
+  - Get `localtime_r()` for `now`.
   - If `tm_mday != trackedDay`:
     - Day rollover detected (midnight).
     - `trackedDay` updated.
@@ -783,12 +862,21 @@ After 14:00 local time, if tomorrow's data is not yet available:
 
 ```cpp
 // v7.4: window capped to 14:00–23:00 (see Fix B in CHANGELOG)
-if (ti->tm_hour >= 14 && ti->tm_hour <= 23 && !isTomorrowDataAvailable) {
+// v7.5 Fix C: localtime_r() into a caller-owned buffer, and the return
+// value is tested — v7.4 dereferenced localtime() here with no NULL check
+struct tm ti;
+bool tomorrowWindow = localtime_r(&now, &ti) &&
+                      ti.tm_hour >= 14 && ti.tm_hour <= 23;
+if (tomorrowWindow && !isTomorrowDataAvailable) {
     fetchAndProcessData(true); // Fetch tomorrow's data
 }
 ```
 
-The API URL is constructed with the `&start=YYYY-MM-DD` parameter for the next day.
+The API URL is constructed with the `&start=YYYY-MM-DD` parameter for the next
+day. Today's fetch uses `&start=YYYY-MM-DD&end=YYYY-MM-DD` for the current local
+date (v7.5 Fix B); both are built from `localtime_r()` + a midday-anchored
+calendar-day increment with `tm_isdst = -1` set before `mktime()`, so the date
+is correct on DST transition days.
 
 **v7.4 scheduling guarantee:** Every failed or rejected tomorrow fetch now advances nextScheduledFetchTime by 1800 s (30 min), preventing a tight retry loop that would block the main loop and starve handleButton(). Additionally, handleDataFetching() contains a belt-and-suspenders guard that forces the schedule forward if the helper somehow fails to advance it.
 
@@ -801,7 +889,7 @@ In `processJsonData()`:
 
 1. Read `unix_seconds[]`.
 2. Interpret the **LAST** timestamp as representing the end of the dataset's market day.
-3. Convert it to local time (`localtime()`).
+3. Convert it to local time (`localtime_r()` — v7.5 Fix C; v7.4 used the shared-static `localtime()`).
 4. Compare its date (day, month, year) to the current local date (or tomorrow's date if `isTomorrow` is true).
    - If they **match**:
      - Dataset is accepted as valid.
@@ -816,7 +904,7 @@ In `processJsonData()`:
 
 A **secondary screen** (toggled via **double‑click**) provides 20 lines of status information, displayed 4 lines at a time:
 
-Typical content (updated for v7.4):
+Typical content (updated for v7.5):
 
 1. Current date and time (`HH:MM  DD.MM.YYYY`)
 2. Separator line (`--------------------`)
@@ -838,7 +926,7 @@ Typical content (updated for v7.4):
 17–20. Credits and version:
     - `energy-charts.info`
     - `dynamic electricity`
-    - `price ticker v7.4`
+    - `price ticker v7.5`
     - `by Legolas-2025`
 
 ---
@@ -871,7 +959,7 @@ If NVS does not contain valid Wi‑Fi credentials, or if connecting fails repeat
    - `DNSServer` (from ESP32 core)
    - `WebServer` (from ESP32 core)
    - `Preferences` (built‑in for ESP32)
-3. Open the v7.4 `.ino` file (`ESP32_standalone_electricity_ticker_7_4.ino`).
+3. Open the v7.5 `.ino` file (`ESP32_standalone_electricity_ticker_7_5.ino`).
 4. In Tools:
    - Board: `Seeed XIAO ESP32C3`
    - Port: choose the correct serial port.
@@ -885,8 +973,78 @@ If NVS does not contain valid Wi‑Fi credentials, or if connecting fails repeat
 
 ---
 
+## Known Issues / Not Yet Fixed (v7.5)
+
+Two issues are known and deliberately **not** fixed in v7.5. Both are
+**intermittent**, both are **pre-existing** (v7.4 behaved identically), and
+neither has a code fix in this release — this section is documentation only.
+
+### 1. Brief UI freeze during a double-click
+
+On a double-click (primary ↔ secondary screen) the indicator LED stops blinking
+for a second or several, and the screen switch only completes when the freeze
+ends.
+
+The button logic is **not** at fault: `toggleList()` only flips `currentList`
+and redraws the LCD. The freeze is the blocking `http.GET()` inside
+`handleDataFetching()` — while the loop is parked in that call, `handleButton()`
+and `updateLeds()` never run, so the LED simply holds its last PWM value and
+button events queue in the ISR.
+
+`Config::HTTP_TIMEOUT` (10 s) and `HTTP_CONNECT_TIMEOUT` (5 s) bound TCP connect
+and socket reads but **not** DNS resolution, which ESP32 lwIP performs
+synchronously. A multi-second stall is therefore consistent with a DNS lookup,
+and raising those two constants would not help.
+
+Why it is intermittent: in normal operation a fetch is due roughly every 30
+minutes, so the exposed window is only the request's own duration — a fraction
+of a percent of the time. It becomes noticeably more likely in a degraded state
+(today's data missing, or the API returning the wrong day), where the retry
+cadence drops to 10 minutes.
+
+**To confirm it,** watch the Serial Monitor at 115200 baud. A freeze is
+preceded by:
+
+```text
+HTTP GET TODAY rc=200 took 4000 ms
+  ^ slow request: loop was blocked for 4000 ms (button edges queued in ISR, applied after)
+```
+
+The 10-second auto-return to the primary screen (`autoScrollTimeout` →
+`resetDisplayToTop()`) does no network work, so it never freezes.
+
+### 2. A double-click can collapse to a single click during a freeze
+
+If both presses of a double-click land inside one blocking fetch, the screen
+scrolls instead of switching lists. `buttonInterruptFired` is a `volatile bool`
+(line 501) — it records *that* an edge occurred, not *how many* — so when the
+loop resumes, `handleButton()` synthesises exactly **one** press+release pair
+and two real presses are reported as one. A double-click straddling the end of
+a freeze fails the same way, because the 500 ms `doubleClickWindow` has already
+expired by the time the second press is processed.
+
+This is dormant whenever no fetch is in flight. It is recorded here so that a
+future "the buttons went flaky again" report is not mistaken for a new
+regression. Fixing it — and the freeze above — means counting edges in the ISR
+and making the fetch non-blocking. Neither is a small patch, so both are
+deferred rather than rushed into this release.
+
+---
+
 ## Versioning & Changelog
 
+- **v7.5** – DST hardening + API URL date bounds + fall-back average fix
+  (2026-10-07):
+  - `tm_isdst = -1` before both `mktime()` calls
+  - Explicit `&start=&end=` date bounds on today's fetch
+  - All 8 remaining `localtime()` call-sites converted to `localtime_r()`
+  - DST-aware hour-block detection in the daily average
+  - Forward-progress guard so a rejected fetch cannot re-enter in a tight loop
+  - HTTP request duration measured instead of guarded
+  - No fetch started within 800 ms of a button edge
+  - Two issues remain open and unfixed — see
+    [Known Issues / Not Yet Fixed](#known-issues--not-yet-fixed-v75).
+  - See highlights above; full details in [`CHANGELOG.md`](./CHANGELOG.md).
 - **v7.4** – Fetch scheduling fix: button responsiveness (2026-10-04). 
   See highlights above; full details in [CHANGELOG.md](./CHANGELOG.md).
 - **v7.3** – DST edge-case hardening (2026-10-03). See highlights above; full
