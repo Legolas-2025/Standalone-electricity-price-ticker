@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here.
 
-## v7.5 – DST Hardening + API URL Date Bounds + Fall-Back Average Fix (2026-10-07)
+## v7.5 – DST Hardening + API URL Date Bounds + Fall-Back Average Fix (2026-10-10)
 
 Hardening and correctness release built on v7.4. Button handling, fee/VAT
 math, NVS layout, 48-hour scrolling behaviour and Midnight Bridge logic are
