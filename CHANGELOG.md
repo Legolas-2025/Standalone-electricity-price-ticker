@@ -2,6 +2,256 @@
 
 All notable changes to this project are documented here.
 
+## v7.6 – Gesture-Safe Button + Single-Market-Day Tomorrow Fetch (2026-10-10)
+
+Two changes built on v7.5: the button path is rebuilt so a touch gesture survives
+a blocking HTTP fetch, and the tomorrow fetch asks for exactly one market day
+instead of an open-ended window.
+
+Fee/VAT math, NVS layout, 48-hour scrolling behaviour, Midnight Bridge logic and
+all DST logic are unchanged. All v7.5 fixes (A–F2), all v7.4 scheduling fixes
+(A, B, E, G) and all v7.2 button/screen fixes (1, 2, 4) are preserved.
+
+### Fix H – Tomorrow fetch now sends an end date
+
+**Symptom**
+
+The tomorrow fetch requested `&start=<tomorrow>` with no `&end=`. On the
+Energy-Charts API `end` is inclusive and defaults to the end of the available
+window, so the request returned several market days.
+
+**Effect**
+
+`processJsonData()` keeps only entries whose local day matches the target day, so
+the surplus was downloaded, parsed and thrown away. The cost landed on the
+slowest path in the firmware — the multi-second blocking `http.GET()` — at the
+hours when the button is most likely to be in use, which is exactly the window in
+which v7.5's known issue (a) freezes the UI.
+
+**Fix**
+
+`fetchAndProcessData()` now appends `&start=<date>&end=<date>` for the tomorrow
+fetch as well, with `start == end`, the same single-market-day contract v7.5
+Fix B established for the today fetch.
+
+### Fix I – Button polarity declared once as `BUTTON_ACTIVE_HIGH`
+
+**Problem**
+
+`HARDWARE_WIRING_DIAGRAM.md` documents two interchangeable inputs on D2 (GPIO4)
+that are inverted with respect to each other:
+
+| Input | Idle level | Actuated level |
+|---|---|---|
+| Mechanical pushbutton wired to GND | HIGH | LOW (active LOW) |
+| TTP223 capacitive touch pad | LOW | HIGH (active HIGH) |
+
+v7.5 sampled the pin as `!digitalRead(buttonPin)`, which is correct only for the
+active-HIGH TTP223, while the surrounding comments described the pin as
+"active-LOW" and called HIGH "released". The code and its documentation disagreed
+about which edge is a press — the ambiguity the v7.2 `buttonEverReleased`
+workaround and v7.4 Fix C were compensating for.
+
+**Fix**
+
+```cpp
+static const bool BUTTON_ACTIVE_HIGH = true;   // true = TTP223, false = mechanical
+
+inline bool buttonIsPressed() {
+    return digitalRead(buttonPin) == (BUTTON_ACTIVE_HIGH ? HIGH : LOW);
+}
+
+// Maps the physical polarity onto the Arduino debounce convention
+// (LOW == pressed, HIGH == released) used inside handleButton().
+inline int buttonReadingToState() {
+    return buttonIsPressed() ? LOW : HIGH;
+}
+```
+
+`buttonIsPressed()` is now the only place the raw pin level is interpreted; the
+ISR and the debounce state machine both work in "pressed / not pressed" terms.
+The default matches the documented TTP223 hardware. Set it to `false` for a
+mechanical pushbutton.
+
+### Fix J – Gestures are captured by the ISR, not reconstructed by the loop
+
+**Root cause of the v7.5 known issue (b)**
+
+v7.4 Fix D recorded `buttonInterruptFired` — a single `volatile bool` meaning
+"an edge happened" — and `handleButton()` then rebuilt a press+release pair from
+whatever the pin was doing when the loop finally got back to it. A gesture that
+completes entirely inside a blocking `http.GET()` leaves the pin back at its idle
+level, so the state machine saw no press edge, no release edge and no duration:
+the synthetic event had a zero duration and the gesture was misclassified or
+dropped. Two real presses during a freeze were reported as one.
+
+**Fix**
+
+`attachInterrupt(digitalPinToInterrupt(buttonPin), buttonISR, CHANGE)` now feeds
+a gesture recorder:
+
+```cpp
+void IRAM_ATTR buttonISR() {
+    unsigned long now = millis();
+    btnEvtLastMs = now;                       // FIX G reads this, before any debounce test
+
+    if (buttonIsPressed()) {
+        if (now - btnEdgeLastMs >= debounceDelay) {
+            btnEdgeLastMs   = now;
+            btnTouchStartMs = now;            // touch opened
+        }
+    } else {
+        if (btnTouchStartMs != 0) {
+            if (now - btnTouchStartMs < GESTURE_MIN_MS) return;  // bounce: stay open
+            btnEdgeLastMs = now;
+            uint8_t next = (uint8_t)((btnGestureWrite + 1) % GESTURE_SLOTS);
+            if (next != btnGestureRead) {     // FIFO not full
+                btnGestureStart[btnGestureWrite] = btnTouchStartMs;
+                btnGestureEnd[btnGestureWrite]    = now;
+                btnGestureWrite = next;
+            }
+            btnTouchStartMs = 0;
+        }
+    }
+    buttonInterruptFired = true;
+}
+```
+
+Debounce rules, chosen so a real gesture is never lost:
+
+- A touch may only **open** if `debounceDelay` (50 ms) has passed since the last
+  accepted edge, so contact bounce cannot open a second gesture.
+- A release only **closes** a gesture if the touch lasted at least
+  `GESTURE_MIN_MS` (40 ms). A shorter release is treated as bounce and the
+  gesture is left open for the real release — rejecting the edge outright would
+  leave the gesture open forever and lose it.
+- If the FIFO is full the newest gesture is dropped rather than overwriting an
+  unread one, so the queue never duplicates or reorders a gesture. 8 slots hold
+  7 gestures, which is more than a user can produce during one fetch.
+
+`handleButton()` drains the FIFO, and the classifier is unchanged apart from
+being fed measured durations:
+
+```cpp
+processButtonPress(pressDuration, endMs, pressDuration >= longPressThreshold);
+```
+
+Both `pressDuration` and `clickTime` come from the ISR's own timestamps. That is
+what keeps the 500 ms `doubleClickWindow` anchored to real gesture timing:
+measuring the gap with `millis()` would compare the moment the loop got round to
+draining, so two clicks four seconds apart during a long fetch would look like a
+double-click.
+
+Before each gesture is judged, a pending single click whose gap to the next
+gesture exceeds `doubleClickWindow` is confirmed first, so two clicks made seconds
+apart during a blocked fetch produce two advances instead of collapsing into one
+pending click.
+
+**v7.4 Fix C is now structural rather than defensive**
+
+`longHeld` is derived from the measured duration itself, so the flag can never be
+set by idle time and can never hijack a short click. The old "duration ≥ threshold
+but `longPressDetected` was not set" fall-through case cannot occur.
+
+**What the debounce state machine is still for**
+
+`buttonPressStartTime`, `longPressDetected` and `buttonEverReleased` now drive
+only the live LCD "Long press detected! / Release to refresh" feedback while a
+finger is still on the pad. They no longer classify gestures, so they can no
+longer lose them. The v7.2 boot-noise guard is retained: a pad held from reset
+produces no `CHANGE` edge, so it yields neither feedback nor a gesture.
+
+### Verification
+
+`http.GET()` remains synchronous, so the freeze itself cannot be reproduced away
+from a board — but the gesture path no longer depends on the loop being free, so
+it can be exercised by driving `buttonISR()`, `processButtonPress()` and
+`handleButton()` directly. `_v76_sim.py` mirrors those three functions and runs
+them against a virtual `millis()` timeline, using the firmware's own constants
+(`longPressThreshold` 3000 ms, `doubleClickWindow` 500 ms, `debounceDelay` 50 ms,
+`GESTURE_MIN_MS` 40 ms, `GESTURE_SLOTS` 8). "Blocked fetch" means the loop calls
+`handleButton()` only at 1000 ms and 16000 ms while every press and release
+happens in between.
+
+| Scenario | Result |
+|---|---|
+| Single click, idle loop | `SINGLE` |
+| Double click | `DOUBLE` |
+| Long press (3.5 s hold) | live LCD feedback at 3100 ms, then `LONG` (3500 ms) |
+| 2.5 s press — below threshold | `SINGLE`, never `LONG` |
+| Click **during** a 12 s blocked fetch | `SINGLE` (lost in v7.5) |
+| Long press **during** a blocked fetch | `LONG` with the true 3500 ms duration |
+| Two clicks 4 s apart during a blocked fetch | `SINGLE` + `SINGLE` |
+| Double click during a blocked fetch | `DOUBLE` |
+| 20 ms bounce tap | rejected — no gesture |
+| Bouncy press (on/off/on within 20 ms, real release at 200 ms) | exactly one `SINGLE` |
+| 100 s idle, no press | nothing — no phantom long press |
+| Pad held from boot, never released | nothing |
+| Pad held from boot, released at 5000 ms | nothing |
+| 7 rapid clicks during a blocked fetch | `DOUBLE`, `DOUBLE`, `DOUBLE`, `SINGLE` |
+| 10 rapid clicks during a blocked fetch | same — FIFO caps at 7 gestures, 3 dropped |
+
+Static checks on the `.ino`: balanced `{}`/`()`/`[]`, no leftover v7.5 button
+machinery (`btnEvtPending`, `btnEvtPressed`, `btnPressStartMs`, `btnReleaseMs`,
+synthetic-event injection, `buttonInterruptFired &&` gating), and exactly one
+raw `digitalRead(buttonPin)` — inside `buttonIsPressed()`.
+
+**Compiled and flashed:** the sketch builds for the Seeed XIAO ESP32C3
+(`esp32:esp32:XIAO_ESP32C3`, ESP32 Arduino core 3.3.12) and has been uploaded to
+the board and run. First run on the device:
+
+```
+[DEBUG] Starting Dynamic Electricity Ticker v7.6 (Gesture-Safe Button + API URL Fix) - DST-SAFE
+[DEBUG] Button interrupt attached on GPIO 4 (active-HIGH: TTP223 touch pad)
+[DEBUG] Double-click detected - toggling list        (x4)
+[DEBUG] Long press threshold reached - waiting for release
+[DEBUG] Long press detected - Forcing manual data refresh (measured 3347 ms)
+```
+
+Two double-clicks 4.4 s apart and two more 5.2 s apart each registered as their
+own double-click, so the 500 ms window is anchored to the gesture times recorded
+by the ISR and not to the moment the loop got round to draining them. The long
+press showed the live feedback at the 3000 ms threshold and was then classified
+from the measured 3347 ms duration.
+
+**Still to be timed on the touch pad:** a click made during a blocked fetch.
+`DEBUG_LEVEL` is 2, which compiles out the level-3 `Gesture captured (<n> ms)`
+and `Single click confirmed` lines; raise it to 3 to watch the ISR-recorded
+durations directly.
+
+### v7.5 known issues — status after v7.6
+
+- **(b) "A double-click can collapse to a single click during a freeze" — fixed**
+  by Fix J. The FIFO carries every gesture; nothing is reconstructed.
+- **(a) "The UI can freeze for a few seconds during a double-click" — unchanged
+  as a freeze.** `http.GET()` is still synchronous and the display still cannot
+  redraw while a request is in flight. What changed is the cost: the freeze no
+  longer swallows the gesture. Fix G still prevents a fetch from *starting*
+  within 800 ms of a button edge. Removing the freeze outright still requires
+  porting the fetch to the asynchronous `esp_http_client` API.
+
+### Cosmetic / non-behavioural changes
+
+- New firmware file: `ESP32_standalone_electricity_ticker_7_6.ino`
+- Version strings bumped from v7.5 to v7.6:
+  - `connectToWiFi()` splash: `"Elec. Rate SI v7.5"` → `"Elec. Rate SI v7.6"`
+  - `displaySecondaryList()` credit line: `"price ticker v7.5"` → `"price ticker v7.6"`
+  - `setup()` debug banner: `"v7.5 (DST + API URL Hardening)"` → `"v7.6 (Gesture-Safe Button + API URL Fix)"`
+- Each captured gesture is logged with its measured duration, so a borderline
+  gesture is diagnosable from the serial log alone.
+- `buttonInterruptFired` is retained for serial-log clarity only; v7.6 no longer
+  uses it to reconstruct a gesture.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `ESP32_standalone_electricity_ticker_7_6.ino` | v7.5 base with Fixes H, I and J |
+| `VERSION.md` | Current firmware updated to v7.6; v7.6 highlights section added |
+| `CHANGELOG.md` | v7.6 section added at top |
+
+---
+
 ## v7.5 – DST Hardening + API URL Date Bounds + Fall-Back Average Fix (2026-10-10)
 
 Hardening and correctness release built on v7.4. Button handling, fee/VAT
